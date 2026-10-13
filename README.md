@@ -1,4 +1,4 @@
-# Compressor Material Assessment — local browser package
+# Compressor Material Assessment
 
 This is a static browser app for checking **a selected material** against a recorded project case. The input sheet and figures in the reference image inspired the workflow. They are **example values and an illustrative domain drawing**, not built-in acceptance rules.
 
