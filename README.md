@@ -28,6 +28,7 @@ Process → Thermodynamics → Selection & aerodynamics → Impellers → Rotor 
 
 <p align="center">
   <img src="docs/images/launcher.png" alt="CentriForge launcher with version, updates and the 14 modules in workflow order" width="98%">
+  <img src="docs/images/materials.png" alt="Material assessment: dew-point and SSC domain charts" width="98%">
   <img src="docs/images/map.png" alt="Performance map with surge and stonewall limits and operating cases" width="49%">
   <img src="docs/images/rotor.png" alt="3D rotor with animated mode shape" width="49%">
   <img src="docs/images/lateral.png" alt="Campbell diagram, critical speed map and unbalance response" width="49%">
@@ -232,10 +233,13 @@ packaging/          desktop app bundle (PyInstaller), Windows installer (Inno Se
 | Version | Theme | Main content |
 |---|---|---|
 | **0.2.0** ✅ | Standalone app | CentriForge name and logo, Windows installer, launcher page, one-click updates, new UI |
-| 0.3.0 | Material assessment | Per-stage sour/wet table, dew-point and SSC domain charts, corrosion acceptance by component, interactive cross-section, auto material selection, weld overlay, SOP/standstill logic, contaminants, material selection report |
-| 0.4.0 | Process, control and testing | Anti-surge control and recycle valve, ASME PTC 10 test conversion, API 614 oil and seal systems, gears (API 613) and couplings (API 671) |
-| 0.5.0 | Drivers and positive displacement | Motor/VFD, steam and gas turbines, reciprocating (API 618) and screw (API 619) compressors |
-| 0.6.0 | Advanced analysis and operations | 3D blade stress and SAFE diagram, mean-line aero, axial stages, Level II stability, THD bearings, API 686 installation, diagnostics, life-cycle cost |
+| **0.3.0** ✅ | Start page, charts, materials | Fast start, start page (new project, examples, tutorial), GraphPad Prism-style charts with editor and exports, rebuilt material assessment with material selection report |
+| 0.4.0 | Impeller FEA Pro | 3D cyclic-sector blade model, pressure/thermal/shrink-fit loads, modal analysis and SAFE diagram, overspeed with plasticity, fatigue, probe and path tools, ParaView export |
+| 0.5.0 | Performance and testing | Stage loss models, multistage matching, PTC 10 field and shop test analysis, troubleshooting (handbook ch. 3–4) |
+| 0.6.0 | Anti-surge and control | Control line, recycle valve sizing, multistage anti-surge law, trip transients |
+| 0.7.0 | Bearings, seals and lube | THD bearings, thrust bearing design, seal selection, API 614 systems |
+| 0.8.0 | Reciprocating compressors | API 618 cylinders, valves, rod load, packing, PV diagnostics, pulsation |
+| 0.9.0 / 1.0.0 | Screw and PD types; plant level | API 619 screw, lobe, diaphragm; foundations, packaging, drivers, life-cycle cost |
 
 The release notes are in [backend/compsuite/data/CHANGELOG.md](backend/compsuite/data/CHANGELOG.md); the
 launcher shows them too. Section-by-section detail against the original proposal is in [docs/ROADMAP.md](docs/ROADMAP.md).

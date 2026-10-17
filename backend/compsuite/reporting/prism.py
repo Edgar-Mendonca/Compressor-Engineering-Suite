@@ -92,6 +92,11 @@ def _shape(ax, s: dict, ax2=None):
     ln = s.get("line") or {}
     kw = {"color": ln.get("color", "#555555"), "lw": ln.get("width", 1.2), "ls": DASHES.get(ln.get("dash", "solid"), "-"),
           "zorder": 1}
+    if s.get("type") == "polygon":  # filled region, e.g. a severity domain
+        pts = s.get("points") or []
+        target.fill([p[0] for p in pts], [p[1] for p in pts], color=s.get("fillcolor", "#0B5CAD"), alpha=s.get("opacity", 0.15),
+                    lw=0, zorder=0)
+        return
     x0, x1, y0, y1 = s.get("x0"), s.get("x1"), s.get("y0"), s.get("y1")
     xp, yp = s.get("xref") == "paper", s.get("yref") == "paper"
     if s.get("type") == "rect":
@@ -112,7 +117,7 @@ def _shape(ax, s: dict, ax2=None):
         target.plot([x0, x1], [y0, y1], **kw)
 
 
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()  # re-entrant: report builders call render() while holding it
 
 
 def render(spec: dict, opts: dict | None = None, fmt: str = "svg", dpi: int = 600) -> dict:
@@ -177,8 +182,9 @@ def _render(spec: dict, opts: dict | None, fmt: str, dpi: int) -> dict:
         for s in layout.get("shapes") or []:
             _shape(ax, s, ax2)
         for a in layout.get("annotations") or []:
-            ax.annotate(_title(a.get("text")), (a.get("x"), a.get("y")),
-                        xycoords="axes fraction" if a.get("xref") == "paper" else "data", fontsize=fs * 0.85)
+            ax.annotate(_title(a.get("text")), (a.get("x"), a.get("y")), ha=a.get("align", "left"),
+                        xycoords="axes fraction" if a.get("xref") == "paper" else "data", fontsize=fs * a.get("scale", 0.85),
+                        color=a.get("color", "#000000"), fontweight="bold" if a.get("bold") else "normal")
         xlog = _apply_axis(ax, layout.get("xaxis") or {}, o, "x", fs)
         ylog = _apply_axis(ax, layout.get("yaxis") or {}, o, "y", fs)
         _style_axes(ax, o, fs)

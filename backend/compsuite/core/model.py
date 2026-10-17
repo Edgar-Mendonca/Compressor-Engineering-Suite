@@ -199,6 +199,9 @@ class MaterialRecord(BaseModel):
     wetted_surface: str = ""
     evidence_reference: str = ""
     verified: bool = False
+    component_class: Optional[Literal["casing", "diaphragm", "impeller", "shaft"]] = Field(
+        None, description="Corrosion acceptance class; None = from the component name")
+    overlay: Optional[str] = Field(None, description="Weld overlay alloy on the wetted surface (e.g. Alloy 625)")
     min_temp_c: Optional[float] = None
     max_temp_c: Optional[float] = None
     max_hardness_hrc: Optional[float] = None
@@ -212,17 +215,110 @@ class MaterialRecord(BaseModel):
     corrosion_resistant: bool = False
 
 
+class StageOverride(BaseModel):
+    """Service condition at one location. Matches a computed location by name (e.g. "Suction", "Stage 2",
+    "SOP design"); other names are added as new locations. None = keep the computed value."""
+    location: str
+    P_bara: Optional[float] = None
+    T_c: Optional[float] = None
+    h2o_pct: Optional[float] = Field(None, description="Water, mol %")
+    co2_pct: Optional[float] = Field(None, description="CO2, mol %")
+    h2s_pct: Optional[float] = Field(None, description="H2S, mol %")
+    ph: Optional[float] = Field(None, description="Measured / vendor pH")
+    cr_mm_y: Optional[float] = Field(None, description="Vendor carbon-steel corrosion rate")
+
+
+class CorrosionCriterion(BaseModel):
+    """Allowed corrosion rate and total loss for one component class (impellers by blade thickness)."""
+    component_class: Literal["casing", "diaphragm", "impeller", "shaft"]
+    blade_min_mm: Optional[float] = Field(None, description="Impellers: blade thickness > this")
+    blade_max_mm: Optional[float] = Field(None, description="Impellers: blade thickness <= this")
+    max_cr_mm_y: float
+    max_total_mm: float
+
+
+def _default_criteria() -> list[CorrosionCriterion]:
+    C = CorrosionCriterion
+    return [C(component_class="impeller", blade_min_mm=4, blade_max_mm=6, max_cr_mm_y=0.05, max_total_mm=1.0),
+            C(component_class="impeller", blade_min_mm=6, blade_max_mm=10, max_cr_mm_y=0.075, max_total_mm=1.5),
+            C(component_class="impeller", blade_min_mm=10, max_cr_mm_y=0.125, max_total_mm=2.5),
+            C(component_class="shaft", max_cr_mm_y=0.05, max_total_mm=1.0),
+            C(component_class="diaphragm", max_cr_mm_y=0.15, max_total_mm=3.0),
+            C(component_class="casing", max_cr_mm_y=0.2, max_total_mm=4.0)]
+
+
+class SSCPoint(BaseModel):
+    ph2s_bar: float
+    ph: float
+
+
+class SSCDomains(BaseModel):
+    """Severity-domain boundaries in the pH2S-pH plane (straight lines in log pH2S). Defaults are
+    illustrative of the ISO 15156-2 Figure 1 shape, NOT the standard's values: enter them from the licensed copy."""
+    sour_threshold_bar: float = Field(0.003, description="Domain 0 below this pH2S")
+    d1_d2: list[SSCPoint] = Field(default_factory=lambda: [SSCPoint(ph2s_bar=0.003, ph=4.0), SSCPoint(ph2s_bar=0.949, ph=6.5),
+                                                           SSCPoint(ph2s_bar=100, ph=6.5)])
+    d2_d3: list[SSCPoint] = Field(default_factory=lambda: [SSCPoint(ph2s_bar=0.003, ph=3.5), SSCPoint(ph2s_bar=0.01, ph=3.5),
+                                                           SSCPoint(ph2s_bar=1.0, ph=5.5), SSCPoint(ph2s_bar=100, ph=5.5)])
+
+
+class WeldOverlay(BaseModel):
+    enabled: Literal["auto", "yes", "no"] = Field("auto", description="auto = where the selection requires it")
+    alloy: str = "IN625"
+    min_undiluted_mm: float = Field(3.0, description="Minimum thickness with undiluted alloy chemistry")
+    max_fe_dilution_pct: float = Field(7.0, description="Fe at 1 mm below the overlay surface (alloy 625: 5-7 % max)")
+    measured_undiluted_mm: Optional[float] = None
+    measured_fe_dilution_pct: Optional[float] = None
+
+
+class SOPSettings(BaseModel):
+    standstill_hours_max: float = Field(4.0, description="Maximum pressurised standstill at SOP the MOC is suitable for")
+    expected_standstill_hours: Optional[float] = None
+    tt_margin_c: float = Field(10.0, description="Trip setpoint above the SOP water dew point")
+    depressurise_to_psig: float = 5.0
+    protected: bool = Field(True, description="Dew-point trip / standstill limit in place: settle-out excluded from component "
+                                              "corrosion and wet limits (False = counted with sop_exposure_fraction)")
+
+
+class Contaminants(BaseModel):
+    mercury_ng_nm3: Optional[float] = None
+    mercury_limit_ng_nm3: float = 1.0
+    chloride_entrainment_ppmv: Optional[float] = Field(None, description="Chloride from liquid carry-over")
+    chloride_saturation_ppmv: Optional[float] = Field(None, description="Chloride with saturation water")
+    o2_ingress_ppmv: Optional[float] = Field(None, description="Max O2 ingress (e.g. via seal N2)")
+    n2_purity_pct: Optional[float] = None
+    o2_threshold_ppb: float = Field(50.0, description="API RP 581: CS/LAS corrosion rate doubled above this O2")
+    o2_rate_multiplier: float = 2.0
+    scrubber_efficiency_pct: Optional[float] = None
+    scrubber_min_efficiency_pct: float = Field(99.9, description="Removal of droplets >= 10 um")
+    carryover_l_mmscfd: Optional[float] = None
+    carryover_max_l_mmscfd: float = 13.4
+    max_droplet_um: Optional[float] = None
+    max_droplet_limit_um: float = 200.0
+
+
 class MaterialAssessment(BaseModel):
     water_content_ppmv: float = Field(500.0, description="Used when H2O is not in the gas composition")
     liquid_water_assumed: bool = Field(False, description="Treat every location as wet (conservative)")
     measured_ph: Optional[float] = Field(None, description="None = estimated condensed-water pH")
     chloride_ppm: Optional[float] = None
-    mdmt_c: float = -29.0
-    service_life_years: float = 25.0
+    mdmt_c: float = Field(-46.0, description="Minimum design metal temperature (pressure parts and internals)")
+    shaft_mdmt_c: float = -29.0
+    service_life_years: float = Field(25.0, description="Design life for cumulative corrosion loss")
     sop_pressure_bara: Optional[float] = Field(None, description="Settle-out pressure; None = estimated")
     sop_temperature_c: float = 15.0
     sop_exposure_fraction: float = Field(0.05, description="Share of service life spent at settle-out (corrosion)")
-    records: list[MaterialRecord] = Field(default_factory=list, description="Empty = defaults from the selected materials")
+    dew_margin_c: float = Field(10.0, description="Wet when T < water dew point + margin")
+    corrosion_factor: float = Field(1.0, description="Multiplier on the de Waard-Milliams rate (scale, inhibition, calibration)")
+    impeller_blade_thickness_mm: Optional[float] = Field(None, description="None = from impeller results / 6 mm")
+    stage_overrides: list[StageOverride] = Field(default_factory=list, description="Empty = conditions from the process results")
+    overrides_only: bool = Field(False, description="Use only the override locations (plus SOP rows)")
+    acceptance_criteria: list[CorrosionCriterion] = Field(default_factory=_default_criteria)
+    ssc_domains: SSCDomains = Field(default_factory=SSCDomains)
+    weld_overlay: WeldOverlay = Field(default_factory=WeldOverlay)
+    sop: SOPSettings = Field(default_factory=SOPSettings)
+    contaminants: Contaminants = Field(default_factory=Contaminants)
+    records: list[MaterialRecord] = Field(default_factory=list, description="Empty = defaults from the automatic selection")
 
 
 class Project(BaseModel):

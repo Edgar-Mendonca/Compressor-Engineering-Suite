@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, download, fmt, type Json } from "../api";
 import { Plot, SERIES } from "../components/Plot";
 import { FIELDS, ImpellerFEAView, SectionPlot } from "../components/ImpellerFEAView";
@@ -729,97 +729,7 @@ export function AuxPage(c: Ctx) {
   );
 }
 
-const VERDICT: Record<string, [string, string]> = { outside: ["fail", "Outside recorded limits"], evidence: ["attention", "Evidence needed"],
-  within: ["pass", "Within recorded limits · conditional"] };
-const LIMITS: [string, string][] = [["min_temp_c", "Min T °C"], ["max_temp_c", "Max T °C"], ["max_hardness_hrc", "Max HRC"],
-  ["measured_hardness_hrc", "Meas. HRC"], ["max_wet_ph2s_bar", "Wet pH₂S bar"], ["max_dry_ph2s_bar", "Dry pH₂S bar"],
-  ["max_pco2_bar", "pCO₂ bar"], ["min_ph", "Min pH"], ["max_chloride_ppm", "Cl⁻ ppm"], ["corrosion_allowance_mm", "CA mm"]];
-
-export function MaterialsPage(c: Ctx) {
-  const [db, setDb] = useState<Json>(null);
-  const [open, setOpen] = useState<number | null>(null);
-  useEffect(() => { api.materials().then(setDb).catch(() => undefined); }, []);
-  const r = c.results;
-  const p = c.project;
-  const ma = p.material_assessment;
-  const res = r?.material_assessment;
-  const records: Json[] = ma.records.length ? ma.records : (res?.components ?? []).map((x: Json) => {
-    const { status, failures, missing, checks, ...rec } = x; void status; void failures; void missing; void checks; return rec;
-  });
-  const setMA = (v: Json) => c.setProject({ ...p, material_assessment: v });
-  const setRec = (i: number, k: string, v: unknown) => setMA({ ...ma, records: records.map((x, j) => (j === i ? { ...x, [k]: v } : x)) });
-  const num = (v: string) => (v === "" ? null : parseFloat(v));
-  const cond: Json[] = res?.conditions ?? [];
-  // Illustrative domain boundaries for the pH2S-pH chart.
-  const xs = [0.003, 0.01, 0.03, 0.1, 0.3, 1, 3, 10];
-  const lg = (x: number) => Math.log10(x);
-  return (
-    <>
-      <h2>Material assessment</h2>
-      <p className="lead">Sour and wet service screening at every stage, driven by the compressor design: partial pressures, water dew
-        point, condensed-water pH, SSC severity domain and CO₂ corrosion, checked against each component's <strong>recorded, verified</strong> limits.
-        A material name alone never passes.</p>
-      {res && <Kpis items={[["Outside limits", String(res.counts.outside)], ["Evidence needed", String(res.counts.evidence)],
-        ["Within limits", String(res.counts.within)], ["Sour", cond.some((x) => x.sour) ? "yes (pH₂S ≥ 0.3 kPa)" : "no"],
-        ["Wet locations", cond.filter((x) => x.wet).map((x) => x.location).join(", ") || "none"]]} />}
-      <div className="grid">
-        <div className="card">
-          <h3>Service conditions by location</h3>
-          <Table rows={cond} cols={[["Location", (x) => x.location], ["P bara", (x) => x.P_bara, 1], ["T °C", (x) => x.T_c, 0],
-            ["pH₂S bar", (x) => x.ph2s_bar, 3], ["pCO₂ bar", (x) => x.pco2_bar, 2], ["Water dew °C", (x) => x.water_dew_point_c, 1],
-            ["State", (x) => (x.wet ? "WET" : "dry")], ["pH", (x) => x.ph, 2], ["Domain", (x) => x.domain], ["CO₂ mm/y", (x) => x.co2_rate_mm_y, 2]]} />
-        </div>
-        <div className="card">
-          <h3>SSC severity map (illustrative domains, not ISO 15156 limits)</h3>
-          <Plot height={300} data={[
-            { x: xs, y: xs.map((x) => Math.min(6.5, 4 + lg(x) - lg(0.003))), mode: "lines", name: "D1 / D2", line: { color: SERIES[2], dash: "dash" } },
-            { x: xs, y: xs.map((x) => Math.min(5.5, 3.5 + lg(x) - lg(0.01))), mode: "lines", name: "D2 / D3", line: { color: SERIES[3], dash: "dash" } },
-            { x: cond.map((x) => Math.max(x.ph2s_bar, 1e-4)), y: cond.map((x) => x.ph), text: cond.map((x) => x.location), mode: "markers+text",
-              textposition: "top center", name: "Locations", marker: { size: 11, color: cond.map((x) => (x.wet ? SERIES[3] : SERIES[0])) } },
-          ]} layout={{ xaxis: { title: "pH₂S (bar)", type: "log" }, yaxis: { title: "pH", range: [2.5, 7] },
-            shapes: [{ type: "line", x0: 0.003, x1: 0.003, yref: "paper", y0: 0, y1: 1, line: { color: SERIES[5], dash: "dot" } }] }} />
-        </div>
-      </div>
-      <div className="card" style={{ marginTop: 14 }}>
-        <h3>Components — recorded limits and verdicts</h3>
-        <div className="scroll"><table className="t">
-          <thead><tr><th>Component</th><th>Material</th><th>Evidence ref.</th><th>Verified</th>{LIMITS.map(([, l]) => <th key={l}>{l}</th>)}<th>Verdict</th></tr></thead>
-          <tbody>{records.map((x, i) => {
-            const v = res?.components?.[i];
-            const [cls, txt] = VERDICT[v?.status ?? "evidence"];
-            return (<Fragment key={i}>
-              <tr>
-                <td>{x.component}</td>
-                <td><select className="inp" value={x.material} onChange={(e) => setRec(i, "material", e.target.value)}>
-                  {(db?.materials ?? [{ key: x.material }]).map((m: Json) => <option key={m.key}>{m.key}</option>)}</select></td>
-                <td><input className="inp" style={{ width: 110 }} value={x.evidence_reference} placeholder="doc / cert ref"
-                  onChange={(e) => setRec(i, "evidence_reference", e.target.value)} /></td>
-                <td><input type="checkbox" checked={x.verified} onChange={(e) => setRec(i, "verified", e.target.checked)} /></td>
-                {LIMITS.map(([k]) => <td key={k}><input className="inp" style={{ width: 64 }} type="number" step="any" value={x[k] ?? ""}
-                  onChange={(e) => setRec(i, k, num(e.target.value))} /></td>)}
-                <td><button className={`badge ${cls}`} onClick={() => setOpen(open === i ? null : i)}>{txt}</button></td>
-              </tr>
-              {open === i && v && <tr><td colSpan={LIMITS.length + 5}>
-                <div className="verdict">
-                  {v.failures.map((t: string) => <div key={t} className="status fail">✕ {t}</div>)}
-                  {v.missing.map((t: string) => <div key={t} className="status attention">○ {t}</div>)}
-                  {v.checks.map((t: string) => <div key={t} className="status pass">✓ {t}</div>)}
-                </div></td></tr>}
-            </Fragment>);
-          })}</tbody>
-        </table></div>
-        <p className="muted">Edit limits from your qualified documents, then re-run. Click a verdict for the detailed checks.</p>
-      </div>
-      <div className="card" style={{ marginTop: 14 }}><h3>Assessment inputs</h3>
-        <SchemaForm schema={c.schema} def="MaterialAssessment" value={ma} onChange={setMA} skip={["records"]} /></div>
-      {db && <details className="card" style={{ marginTop: 14 }}><summary><strong>Material database</strong> <span className="muted">— {db._notice}</span></summary>
-        <Table rows={db.materials} cols={[["Material", (m) => m.key], ["Family", (m) => m.family.replace(/_/g, " ")], ["ρ kg/m³", (m) => m.density_kg_m3, 0],
-          ["E GPa", (m) => m.E_gpa, 0], ["Sy MPa", (m) => m.yield_mpa, 0], ["Su MPa", (m) => m.uts_mpa, 0], ["T min °C", (m) => m.min_temp_c, 0],
-          ["T max °C", (m) => m.max_temp_c, 0], ["Sour HRC max", (m) => m.sour_max_hrc ?? "–"], ["Corrosion", (m) => m.corrosion]]} /></details>}
-      {res && <Trace trace={res.trace} />}
-    </>
-  );
-}
+export { MaterialsPage } from "./Materials";
 
 // ------------------------------------------------------------------ evaluate
 const VARIABLES = ["shaft.shaft_diameter_at_impellers_mm", "shaft.journal_diameter_mm", "bearings.length_to_diameter", "bearings.radial_clearance_ratio",

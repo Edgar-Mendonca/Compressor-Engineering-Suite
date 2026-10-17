@@ -308,6 +308,18 @@ EXPORTS = {"report.html": "text/html", "report.pdf": "application/pdf",
            "calculix-beam.inp": "text/plain", "calculix-axisymmetric.inp": "text/plain", "scene.json": "application/json"}
 
 
+@app.post("/api/export/material-selection.pdf")
+def export_material_report(req: RunRequest):
+    from compsuite.materials.report import material_selection_report
+    from compsuite.reporting import prism
+    res = _run_cached(req.project, req.level)
+    with prism._LOCK:
+        pdf = material_selection_report(req.project, res)
+    name = req.project.name.replace(" ", "_")
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}_material_selection.pdf"'})
+
+
 @app.post("/api/export/{kind}")
 def export(kind: str, req: RunRequest):
     if kind not in EXPORTS:

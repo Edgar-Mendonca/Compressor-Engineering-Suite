@@ -25,6 +25,54 @@ def _item(cat, desc, criterion, value, ok, ref, module, note="", attention=False
             "reference": ref, "module": module, "note": note}
 
 
+def _status_item(cat, desc, criterion, value, status, ref, module, note=""):
+    """Item with an explicit status (pass / fail / attention / review)."""
+    return {"category": cat, "check": desc, "criterion": criterion, "value": value, "status": status,
+            "reference": ref, "module": module, "note": note}
+
+
+def _material_items(ma: dict) -> list[dict]:
+    """Material assessment: corrosion acceptance, SSC/NACE, MDMT, record evidence, overlay, SOP, contaminants."""
+    out, cat, mod = [], "Material assessment", "materials.assessment"
+    for c in ma.get("components", []):
+        name, sel = c["component"], c.get("selection") or {}
+        if c.get("limit_cr") is not None:
+            out.append(_status_item(cat, f"Corrosion acceptance - {name}",
+                                    f"<= {c['limit_cr']:g} mm/y and <= {c['limit_total']:g} mm",
+                                    f"{c['cr_mm_y']:.3f} mm/y, {c['loss_mm']:.2f} mm ({c.get('surface', c['material'])})",
+                                    "pass" if c["acceptance"] == "pass" else "fail", "Project corrosion acceptance criteria", mod))
+        if sel:
+            nace = sel["nace"]
+            st = {"compliant": "pass", "not sour": "pass", "conditional": "attention"}.get(nace, "review")
+            if sel["proposed"] != c["material"]:
+                st, note = "attention", f"Recorded material differs from the proposed {sel['proposed']}"
+            else:
+                note = "Hardness / SSC qualification to be certified" if nace != "not sour" else ""
+            out.append(_status_item(cat, f"SSC / ISO 15156 - {name}: {sel['designation']}", f"Domain {sel['domain'][1:]} service",
+                                    nace, st, "ISO 15156-2/3 (NACE MR0175)", mod, note))
+            out.append(_status_item(cat, f"MDMT - {name}", f"Material rating <= {sel['mdmt_c']:g} degC",
+                                    f"{sel['min_temp_c']:g} degC", "pass" if sel["mdmt_ok"] else "fail", "Design basis MDMT", mod))
+        st = {"outside": "fail", "evidence": "attention", "within": "pass"}[c["status"]]
+        out.append(_status_item(cat, f"Recorded limits - {name}: {c['material']}", "Within recorded, verified limits",
+                                "; ".join(c["failures"][:2]) or (f"{len(c['missing'])} evidence item(s) missing" if c["missing"]
+                                                                 else "within limits"),
+                                st, "ISO 15156 / project material records", mod, "; ".join(c["missing"][:3])))
+    w = ma.get("weld_overlay")
+    if w and w["required"]:
+        for ck in w["checks"]:
+            out.append(_status_item(cat, f"Weld overlay {w['alloy']} - {ck['check']}", ck["criterion"], ck["value"] if ck["value"] is not None
+                                    else "not recorded", ck["status"], "Project overlay specification", mod, ck["note"]))
+    s = ma.get("sop")
+    if s:
+        val = f"{s['temperature_c']:.1f} degC vs dew {s['dew_point_c']:.1f} degC" if s["dew_point_c"] is not None else "no water"
+        out.append(_status_item(cat, "Settle-out (SOP) condensation", "T >= dew point + margin, or trip and standstill limit",
+                                val, s["status"], "Material selection basis", mod, "; ".join(s["statements"][2:4])))
+    for ck in ma.get("contaminants", []):
+        out.append(_status_item(cat, f"Contaminant - {ck['item']}", ck["limit"], ck["value"] if ck["value"] is not None else "not specified",
+                                ck["status"], "Process data / API RP 581", mod, ck["note"]))
+    return out
+
+
 def build_checklist(project, res: dict) -> dict:
     cr, db = project.criteria, project.design_basis
     items = []
@@ -138,12 +186,7 @@ def build_checklist(project, res: dict) -> dict:
                            ", ".join(k for k, v in sel["checks"].items() if not v) or "all screening checks met",
                            sel["suitable"], "ISO 15156 / API 617", "materials",
                            "Record documented service limits and evidence for this material"))
-    for c in res.get("material_assessment", {}).get("components", []):
-        st = c["status"]
-        items.append(_item("Material assessment", f"{c['component']}: {c['material']}", "Within recorded, verified limits",
-                           "; ".join(c["failures"][:2]) or (f"{len(c['missing'])} evidence item(s) missing" if c["missing"] else "within limits"),
-                           st != "outside", "ISO 15156 / project material records", "materials.assessment",
-                           "; ".join(c["missing"][:3]), attention=st == "evidence"))
+    items += _material_items(res.get("material_assessment") or {})
     for ci, cas in enumerate(res["casings"]):
         for f in (cas.get("impeller_fea") or {}).get("impellers", []):
             items.append(_item("Structural", f"Impeller FEA overspeed peak - casing {ci + 1} imp {f['impeller']}", "Peak von Mises <= Sy (local)",

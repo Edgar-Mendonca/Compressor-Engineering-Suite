@@ -110,7 +110,6 @@ def run_project(project, level: str = "full") -> dict:
         scr["selected"] = sel
         mats[use] = scr
     res["materials"] = mats
-    res["material_assessment"] = material_assessment(gas, sizing, project)
 
     # Steps 5-11 per casing.
     casings = []
@@ -162,6 +161,8 @@ def run_project(project, level: str = "full") -> dict:
                         "static": static, "shaft": shaft, "seals": seals, "lateral": lateral, "impeller_stress": stress, "impeller_fea": fea,
                         "mass_properties": model.mass_properties(), "_model": model, "_shaft_material": shaft_mat})
     res["casings"] = casings
+    res["material_assessment"] = material_assessment(gas, sizing, project,
+                                                     [i for c in casings for i in c["impellers"]["impellers"]])
     res["_gas"] = gas
 
     # Step 10: torsional train (driver + first casing).

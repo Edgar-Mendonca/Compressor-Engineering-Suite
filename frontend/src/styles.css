@@ -224,3 +224,19 @@ header.bar .tabs button:disabled { opacity: .4; }
 .tour h3 { margin: 4px 0 6px; font: 600 17px var(--sans); } .tour p { margin: 0 0 12px; font-size: 13.5px; }
 .tour-x { position: absolute; top: 6px; right: 8px; border: 0; background: none; color: var(--muted); font-size: 20px; cursor: pointer; }
 @media (max-width: 1100px) { .start { grid-template-columns: 1fr; } .start .cell { border-right: 0; border-bottom: 1px solid var(--line); } }
+
+/* Material assessment */
+input.inp.cell { width: 78px; padding: 3px 6px; }
+input.inp.cell::placeholder { color: var(--muted); opacity: .85; }
+tr.soprow td { background: color-mix(in srgb, var(--attention) 6%, transparent); }
+tr.click { cursor: pointer; }
+.dom { display: inline-block; color: #fff; font: 600 10.5px var(--mono); letter-spacing: .08em; padding: 2px 7px; text-transform: uppercase; }
+.detail { display: grid; grid-template-columns: 1.1fr 1fr 1.4fr; gap: 18px; padding: 8px 4px; }
+.detail ul { margin: 4px 0 10px; padding-left: 18px; }
+.xsec { width: 100%; height: auto; background: #fff; border: 1px solid var(--line); }
+.xpart { cursor: pointer; stroke: #3b4652; stroke-width: 1.2; transition: opacity .15s; }
+.xpart:hover { opacity: .8; } .xpart.sel { stroke: #0B5CAD; stroke-width: 3; }
+.xlab { font: 12px var(--mono); fill: #5b6878; letter-spacing: .1em; text-transform: uppercase; }
+.legend .sw { display: inline-block; width: 12px; height: 12px; margin: 0 4px 0 10px; border: 1px solid #3b4652; vertical-align: -2px; }
+@media (max-width: 1100px) { .detail { grid-template-columns: 1fr; } }
+.detail .form { grid-template-columns: 1fr 1fr; gap: 8px 12px; }
