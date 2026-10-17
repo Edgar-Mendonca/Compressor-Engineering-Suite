@@ -184,3 +184,43 @@ td .status, .status.chipish { text-transform: uppercase; }
   header.top input.title { min-width: 0; width: 100%; }
   .filters .search { margin-left: 0; width: 100%; }
 }
+
+/* Prism charts */
+.pchart { position: relative; }
+.pbar { display: flex; justify-content: flex-end; gap: 0; margin-bottom: 4px; }
+.pbar .chip { padding: 3px 9px; font-size: 10px; }
+.plot { position: relative; width: 100%; background: #fff; border: 1px solid var(--line); cursor: crosshair; overflow: hidden; }
+.plot .svg svg { display: block; width: 100%; height: auto; }
+.ploading { display: grid; place-items: center; color: #5b6878; font: 12px var(--mono); }
+.xhair { position: absolute; pointer-events: none; background: rgba(11, 92, 173, .45); }
+.xhair.v { width: 1px; } .xhair.h { height: 1px; }
+.xdot { position: absolute; width: 11px; height: 11px; margin: -6px 0 0 -6px; border: 2px solid; border-radius: 50%; background: #fff; pointer-events: none; }
+.xread { position: absolute; pointer-events: none; background: rgba(255, 255, 255, .94); border: 1px solid #b9bfc2; color: #0c1a2b; padding: 3px 7px; font-size: 11px; line-height: 1.35; white-space: nowrap; }
+.peditor { border: 1px solid var(--line); border-top: 0; background: var(--panel-2); padding: 12px 14px; }
+.peditor .pair { display: flex; gap: 6px; } .peditor .pair > * { flex: 1; min-width: 0; }
+.peditor input[type=color] { width: 36px; height: 24px; padding: 0; border: 1px solid var(--line-2); background: none; }
+
+/* Start page */
+.start { display: grid; grid-template-columns: 1fr 1.4fr 1.2fr; border: 1px solid var(--line); background: var(--panel); margin-bottom: 14px; }
+.start .cell { padding: 18px 22px; border-right: 1px solid var(--line); min-width: 0; }
+.start .cell:last-child { border-right: 0; }
+.big-btn { height: 46px; font-size: 13px; margin-bottom: 6px; }
+.start label.btn { margin-top: 10px; }
+.excard { display: grid; gap: 4px; width: 100%; text-align: left; border: 1px solid var(--line-2); background: var(--bg); color: var(--ink); padding: 12px 14px;
+  margin-bottom: 8px; cursor: pointer; font: 13.5px var(--sans); }
+.excard:hover { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.excard b { font-size: 15px; } .excard .pill { margin-right: 4px; }
+.recent { display: grid; border-top: 1px solid var(--line); }
+.recent button { display: flex; justify-content: space-between; gap: 10px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--ink); padding: 8px 2px; cursor: pointer; font: 13.5px var(--sans); text-align: left; }
+.recent button:hover { color: var(--accent); }
+button:disabled { cursor: not-allowed; }
+header.bar .tabs button:disabled { opacity: .4; }
+.modal-bg { position: fixed; inset: 0; background: rgba(8, 14, 22, .45); display: grid; place-items: center; z-index: 50; }
+.modal { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; background: var(--panel); border: 1px solid var(--line-2); }
+.modal .seg { border: 0; border-bottom: 1px solid var(--line-2); } .modal .seg button { flex: 1; }
+.mbody { padding: 18px 20px; } .mfoot { padding: 12px 20px; border-top: 1px solid var(--line); margin: 0; }
+.tour { position: fixed; right: 22px; bottom: 22px; width: min(400px, calc(100vw - 32px)); z-index: 40; background: var(--panel); border: 1px solid var(--line-2);
+  border-top: 3px solid var(--accent); padding: 14px 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, .18); }
+.tour h3 { margin: 4px 0 6px; font: 600 17px var(--sans); } .tour p { margin: 0 0 12px; font-size: 13.5px; }
+.tour-x { position: absolute; top: 6px; right: 8px; border: 0; background: none; color: var(--muted); font-size: 20px; cursor: pointer; }
+@media (max-width: 1100px) { .start { grid-template-columns: 1fr; } .start .cell { border-right: 0; border-bottom: 1px solid var(--line); } }

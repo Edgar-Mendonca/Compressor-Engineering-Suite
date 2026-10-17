@@ -19,6 +19,16 @@ from compsuite import APP_NAME, __version__
 from compsuite.core.paths import FROZEN, data_dir
 
 
+SPLASH = f"""<!doctype html><html><body style="margin:0;height:100vh;display:grid;place-items:center;background:#F2F3EF;
+font-family:'Segoe UI',Arial,sans-serif;color:#0C1A2B"><div style="text-align:center">
+<div style="font-size:42px;font-weight:700;letter-spacing:.04em">Centri<span style="color:#0B5CAD">Forge</span></div>
+<div style="font:12px Consolas,monospace;letter-spacing:.2em;color:#5B6878;margin-top:6px">COMPRESSOR ENGINEERING SUITE · {__version__}</div>
+<div style="width:220px;height:3px;background:#D3D7D6;margin:28px auto 10px;overflow:hidden"><div style="width:40%;height:100%;
+background:#0B5CAD;animation:s 1.1s infinite ease-in-out"></div></div>
+<div style="font:12px Consolas,monospace;color:#5B6878">Starting engineering engine…</div></div>
+<style>@keyframes s{{0%{{transform:translateX(-100%)}}100%{{transform:translateX(250%)}}}}</style></body></html>"""
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -46,6 +56,10 @@ def selftest() -> int:
     from compsuite.reporting.report import report_pdf
     res = run_project(Project(), level="fast")
     report_pdf(Project(), res)
+    from compsuite.reporting.prism import render
+    spec = {"data": [{"x": [1, 10], "y": [1, 2], "mode": "lines+markers"}], "layout": {"xaxis": {"type": "log"}}}
+    for fmt in ("svg", "png", "pdf"):
+        assert render(spec, fmt=fmt, dpi=100)["content"], fmt
     _, url = _serve(_free_port())
     page = urllib.request.urlopen(url + "/").read()
     assert b"<div id=\"root\">" in page, "frontend not bundled"
@@ -58,22 +72,36 @@ def main() -> int:
         sys.stdout = sys.stderr = open(data_dir() / "centriforge.log", "w", buffering=1, encoding="utf-8")
     if "--selftest" in sys.argv:
         return selftest()
-    server, url = _serve(_free_port())
     try:
         import webview
     except ImportError:
+        server, url = _serve(_free_port())
         webbrowser.open(url)
         print(f"{APP_NAME} running at {url} - close this window to stop.")
         while True:
             time.sleep(3600)
+    state: dict = {}
+
+    def boot(window):  # runs after the splash window is on screen
+        try:
+            state["server"], url = _serve(_free_port())
+            window.load_url(url)
+        except Exception as exc:  # show the reason instead of a frozen splash
+            window.load_html(f"<body style='font-family:Segoe UI;padding:40px'><h2>{APP_NAME} could not start</h2><pre>{exc}</pre></body>")
+
     try:
-        webview.create_window(f"{APP_NAME} {__version__}", url, width=1480, height=920, min_size=(1000, 640))
-        webview.start()
+        win = webview.create_window(f"{APP_NAME} {__version__}", html=SPLASH, width=1480, height=920, min_size=(1000, 640),
+                                    background_color="#F2F3EF")
+        webview.start(boot, win)
     except Exception as exc:  # no WebView2 runtime: use the default browser instead
         print(f"Native window unavailable ({exc}); opening the browser.")
+        server, url = _serve(_free_port())
         webbrowser.open(url)
         while True:
             time.sleep(3600)
+    server = state.get("server")
+    if server is None:
+        return 0
     server.should_exit = True
     return 0
 

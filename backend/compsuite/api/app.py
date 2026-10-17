@@ -20,16 +20,11 @@ from pydantic import BaseModel, Field
 
 from compsuite import APP_NAME, __version__
 from compsuite.api.appinfo import router as appinfo_router
-from compsuite.cad.geometry import cadquery_available, rotor_step, rotor_stl, scene
 from compsuite.core.model import Project
 from compsuite.core.paths import database_path, resource_root
 from compsuite.core.storage import Store
 from compsuite.core.trace import input_hash, jsonable
-from compsuite.core.workflow import run_project
 from compsuite.materials.database import _db as materials_db, at_temperature
-from compsuite.optimization import studies
-from compsuite.reporting.report import report_html, report_pdf, results_excel
-from compsuite.structural.calculix import rotor_axisymmetric_deck, rotor_beam_deck
 from compsuite.thermo.backends import coolprop_available, make_gas
 from compsuite.thermo.components import COMPONENTS
 
@@ -39,6 +34,58 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 app.include_router(appinfo_router)
 store = Store(database_path())
+
+# Heavy engineering and reporting modules load on first use (or in the
+# background after start-up, see warm_up) so the server answers in about a second.
+
+
+def run_project(project, level="full"):
+    from compsuite.core.workflow import run_project as _run
+    return _run(project, level=level)
+
+
+def _cad():
+    from compsuite.cad import geometry
+    return geometry
+
+
+def _studies():
+    from compsuite.optimization import studies
+    return studies
+
+
+class _LockedReport:
+    """Report builders use pyplot (global state): share the chart renderer's lock."""
+
+    def __getattr__(self, name):
+        from compsuite.reporting import prism, report
+        fn = getattr(report, name)
+
+        def call(*a, **k):
+            with prism._LOCK:
+                return fn(*a, **k)
+        return call
+
+
+def _rep():
+    return _LockedReport()
+
+
+def _ccx():
+    from compsuite.structural import calculix
+    return calculix
+
+
+def warm_up() -> None:
+    """Import the solver stack in the background so the first analysis starts at once."""
+    import compsuite.core.workflow  # noqa: F401
+    import compsuite.reporting.prism  # noqa: F401
+
+
+@app.on_event("startup")
+def _start_warm_up():
+    import threading
+    threading.Thread(target=warm_up, daemon=True).start()
 _cache: "OrderedDict[str, dict]" = OrderedDict()
 
 
@@ -60,12 +107,28 @@ def _run_cached(project: Project, level: str = "full") -> dict:
 # ---------------------------------------------------------------- reference
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "version": __version__, "engines": {"coolprop": coolprop_available(), "cadquery": cadquery_available()}}
+    return {"status": "ok", "version": __version__, "engines": {"coolprop": coolprop_available(), "cadquery": _cad().cadquery_available()}}
 
 
 @app.get("/api/defaults")
 def defaults():
     return Project().model_dump()
+
+
+@app.get("/api/examples")
+def examples():
+    from compsuite.examples import catalogue
+    return catalogue()
+
+
+@app.get("/api/examples/{key}")
+def example(key: str):
+    from compsuite.examples import EXAMPLES, blank
+    if key == "blank":
+        return blank().model_dump()
+    if key not in EXAMPLES:
+        raise HTTPException(404, f"Unknown example {key}")
+    return EXAMPLES[key]["build"]().model_dump()
 
 
 @app.get("/api/schema")
@@ -162,7 +225,7 @@ def run(req: RunRequest):
     res = _run_cached(req.project, req.level)
     out = jsonable(res)
     cas = res["casings"][0]
-    out["scene"] = scene(cas["rotor"], cas["impellers"]["impellers"])
+    out["scene"] = _cad().scene(cas["rotor"], cas["impellers"]["impellers"])
     return JSONResponse(out)
 
 
@@ -220,7 +283,7 @@ def run_saved(pid: int, level: Literal["full", "fast"] = "full", revision: Optio
     run_id = store.save_run(pid, info["revision"], res)
     out = jsonable(res)
     cas = res["casings"][0]
-    out["scene"] = scene(cas["rotor"], cas["impellers"]["impellers"])
+    out["scene"] = _cad().scene(cas["rotor"], cas["impellers"]["impellers"])
     out["run_id"] = run_id
     return JSONResponse(out)
 
@@ -254,28 +317,28 @@ def export(kind: str, req: RunRequest):
     cas = res["casings"][0]
     headers = {"Content-Disposition": f'attachment; filename="{p.name.replace(" ", "_")}_rev{p.revision}_{kind}"'}
     if kind == "report.html":
-        return HTMLResponse(report_html(p, res))
+        return HTMLResponse(_rep().report_html(p, res))
     if kind == "report.pdf":
-        return Response(report_pdf(p, res), media_type=EXPORTS[kind], headers=headers)
+        return Response(_rep().report_pdf(p, res), media_type=EXPORTS[kind], headers=headers)
     if kind == "results.xlsx":
-        return Response(results_excel(p, res), media_type=EXPORTS[kind], headers=headers)
+        return Response(_rep().results_excel(p, res), media_type=EXPORTS[kind], headers=headers)
     if kind == "results.json":
         return JSONResponse(jsonable(res), headers=headers)
     if kind == "rotor.stl":
-        return Response(rotor_stl(cas["rotor"], cas["impellers"]["impellers"]), media_type=EXPORTS[kind], headers=headers)
+        return Response(_cad().rotor_stl(cas["rotor"], cas["impellers"]["impellers"]), media_type=EXPORTS[kind], headers=headers)
     if kind == "rotor.step":
-        if not cadquery_available():
+        if not _cad().cadquery_available():
             raise HTTPException(501, "STEP export needs CadQuery (pip install cadquery)")
         with tempfile.TemporaryDirectory() as d:
-            path = rotor_step(cas["rotor"], cas["impellers"]["impellers"], str(Path(d) / "rotor.step"))
+            path = _cad().rotor_step(cas["rotor"], cas["impellers"]["impellers"], str(Path(d) / "rotor.step"))
             return Response(Path(path).read_bytes(), media_type=EXPORTS[kind], headers=headers)
     if kind == "calculix-beam.inp":
         kb = sum(r["kyy"] for r in cas["bearing_rated"].values() if "kyy" in r) / max(len(cas["bearing_rated"]), 1) or 1e9
-        return Response(rotor_beam_deck(cas["_model"], kb, p.name), media_type="text/plain", headers=headers)
+        return Response(_ccx().rotor_beam_deck(cas["_model"], kb, p.name), media_type="text/plain", headers=headers)
     if kind == "calculix-axisymmetric.inp":
         w = res["sizing"]["speed_rpm"] * p.design_basis.max_continuous_speed_pct / 100 * 3.141592653589793 / 30
-        return Response(rotor_axisymmetric_deck(cas["rotor"], cas["_shaft_material"], w), media_type="text/plain", headers=headers)
-    return JSONResponse(scene(cas["rotor"], cas["impellers"]["impellers"]))
+        return Response(_ccx().rotor_axisymmetric_deck(cas["rotor"], cas["_shaft_material"], w), media_type="text/plain", headers=headers)
+    return JSONResponse(_cad().scene(cas["rotor"], cas["impellers"]["impellers"]))
 
 
 # ---------------------------------------------------------------- studies
@@ -309,38 +372,74 @@ class CompareRequest(BaseModel):
 
 @app.get("/api/studies/metrics")
 def study_metrics():
-    return sorted(studies.METRICS)
+    return sorted(_studies().METRICS)
 
 
 def _check_metrics(ms):
-    bad = [m for m in ms if m not in studies.METRICS]
+    bad = [m for m in ms if m not in _studies().METRICS]
     if bad:
-        raise HTTPException(422, f"Unknown metrics {bad}. Available: {sorted(studies.METRICS)}")
+        raise HTTPException(422, f"Unknown metrics {bad}. Available: {sorted(_studies().METRICS)}")
 
 
 @app.post("/api/studies/parametric")
 def parametric(req: ParametricRequest):
     _check_metrics(req.metrics)
-    return jsonable(studies.parametric_study(req.project, req.variable, req.values, req.metrics))
+    return jsonable(_studies().parametric_study(req.project, req.variable, req.values, req.metrics))
 
 
 @app.post("/api/studies/sensitivity")
 def sensitivity(req: SensitivityRequest):
     _check_metrics(req.metrics)
-    return jsonable(studies.sensitivity(req.project, req.variables, req.metrics, req.rel_step))
+    return jsonable(_studies().sensitivity(req.project, req.variables, req.metrics, req.rel_step))
 
 
 @app.post("/api/studies/optimize")
 def optimize(req: OptimizeRequest):
     _check_metrics([req.objective] + [c["metric"] for c in req.constraints])
-    return jsonable(studies.optimize(req.project, req.variables, req.objective, req.sense, req.constraints, req.max_evals))
+    return jsonable(_studies().optimize(req.project, req.variables, req.objective, req.sense, req.constraints, req.max_evals))
 
 
 @app.post("/api/studies/compare")
 def compare(req: CompareRequest):
     if req.metrics:
         _check_metrics(req.metrics)
-    return jsonable(studies.compare_configurations(req.projects, req.metrics))
+    return jsonable(_studies().compare_configurations(req.projects, req.metrics))
+
+
+# ---------------------------------------------------------------- charts
+class PlotRequest(BaseModel):
+    spec: dict[str, Any]
+    opts: dict[str, Any] = Field(default_factory=dict)
+    dpi: int = Field(600, ge=72, le=1200)
+
+
+_plot_cache: "OrderedDict[str, dict]" = OrderedDict()
+
+
+@app.post("/api/plot")
+def plot(req: PlotRequest):
+    """Render a chart in the GraphPad Prism style: SVG plus axes metadata for the data cursor."""
+    import hashlib
+    import json
+    from compsuite.reporting.prism import render
+    key = hashlib.sha1(json.dumps([req.spec, req.opts], sort_keys=True, default=str).encode()).hexdigest()
+    if key not in _plot_cache:
+        try:
+            r = render(req.spec, req.opts, "svg")
+        except (ValueError, TypeError, KeyError) as exc:
+            raise HTTPException(422, f"Chart could not be drawn: {exc}") from exc
+        _plot_cache[key] = {"svg": r["content"], "meta": r["meta"]}
+        while len(_plot_cache) > 64:
+            _plot_cache.popitem(last=False)
+    return _plot_cache[key]
+
+
+@app.post("/api/plot/export/{fmt}")
+def plot_export(fmt: Literal["png", "svg", "pdf"], req: PlotRequest):
+    from compsuite.reporting.prism import render
+    r = render(req.spec, req.opts, fmt, dpi=req.dpi)
+    media = {"png": "image/png", "svg": "image/svg+xml", "pdf": "application/pdf"}[fmt]
+    return Response(r["content"], media_type=media, headers={"Content-Disposition": f'attachment; filename="chart.{fmt}"'})
 
 
 # ---------------------------------------------------------------- frontend

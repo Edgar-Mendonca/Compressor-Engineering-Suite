@@ -43,7 +43,10 @@ def impeller_geometry(stage: dict, D2: float, U2: float, m_dot: float, shaft_d: 
         cm1 = Q_in / area
         return math.hypot(cm1, omega * D1 / 2)
 
-    res = minimize_scalar(w1_tip, bounds=(hub_d * 1.05, 0.85 * D2), method="bounded")
+    # Eye diameter for minimum inlet relative velocity. A hub that leaves no room
+    # (very small, high-speed stages on a thick shaft) is reported by the checks.
+    lo, hi = hub_d * 1.05, max(0.85 * D2, hub_d * 1.15)
+    res = minimize_scalar(w1_tip, bounds=(lo, hi), method="bounded")
     D1 = float(res.x)
     cm1 = Q_in / (math.pi / 4 * (D1**2 - hub_d**2))
     sigma = wiesner_slip(BLADES, BACKSWEEP_DEG)

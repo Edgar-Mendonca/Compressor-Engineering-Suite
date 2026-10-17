@@ -47,7 +47,56 @@ function UpdatePanel({ info }: { info: Json }) {
   );
 }
 
-export function Launcher({ results, project, open, running }: { results: Json; project: Json; open: (id: string) => void; running: boolean }) {
+type StartActions = { newProject: () => void; openExample: (key: string) => void; tutorial: () => void;
+  openSaved: (id: number) => void; importFile: (p: Json) => void; resume: (() => void) | null; resumeName: string };
+
+function StartPanel({ a }: { a: StartActions }) {
+  const [ex, setEx] = useState<Json[]>([]);
+  const [saved, setSaved] = useState<Json[]>([]);
+  useEffect(() => {
+    api.examples().then(setEx).catch(() => setEx([]));
+    api.projects().then(setSaved).catch(() => setSaved([]));
+  }, []);
+  return (
+    <section className="start">
+      <div className="cell">
+        <div className="mono caps label">Start</div>
+        <button className="btn primary wide big-btn" onClick={a.newProject}>New project</button>
+        <p className="muted small">Guided setup: name, driver, gas and design case. Everything else starts from sensible defaults.</p>
+        <label className="btn wide">Import project file
+          <input type="file" accept=".json,application/json" hidden onChange={async (e) => {
+            const f = e.target.files?.[0];
+            if (!f) return;
+            try { a.importFile(JSON.parse(await f.text())); } catch (err) { alert(`Not a CentriForge project file: ${(err as Error).message}`); }
+            e.target.value = "";
+          }} /></label>
+        {a.resume && <button className="btn wide" style={{ marginTop: 8 }} onClick={a.resume}>Continue: {a.resumeName}</button>}
+      </div>
+      <div className="cell">
+        <div className="mono caps label">Examples</div>
+        {ex.map((e) => (
+          <button key={e.id} className="excard" onClick={() => a.openExample(e.id)}>
+            <b>{e.title}</b><span className="muted">{e.summary}</span>
+            <span>{e.tags.map((t: string) => <span key={t} className="pill blue">{t}</span>)}</span>
+          </button>
+        ))}
+      </div>
+      <div className="cell">
+        <div className="mono caps label">Learn</div>
+        <button className="excard" onClick={a.tutorial}>
+          <b>Guided tutorial</b><span className="muted">Walks through all 14 modules on the export gas example: what to enter, how to read each result.</span>
+          <span><span className="pill blue">12 steps</span> <span className="pill blue">10 min</span></span>
+        </button>
+        <div className="mono caps label" style={{ marginTop: 14 }}>Recent projects</div>
+        {saved.length === 0 ? <p className="muted small">Saved projects appear here (Reports & projects → Save project).</p>
+          : <div className="recent">{saved.slice(0, 6).map((p) => (
+            <button key={p.id} onClick={() => a.openSaved(p.id)}><b>{p.name}</b><span className="mono small muted">rev {p.current_revision} · {String(p.updated).slice(0, 10)}</span></button>))}</div>}
+      </div>
+    </section>
+  );
+}
+
+export function Launcher({ results, project, open, running, actions }: { results: Json; project: Json; open: (id: string) => void; running: boolean; actions: StartActions }) {
   const [info, setInfo] = useState<Json>(null);
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
@@ -76,7 +125,9 @@ export function Launcher({ results, project, open, running }: { results: Json; p
         <div className="cell">{info ? <UpdatePanel info={info} /> : <span className="mono small muted">Loading app info…</span>}</div>
       </section>
 
-      <section className="hero project">
+      <StartPanel a={actions} />
+
+      {project && <section className="hero project">
         <div className="cell">
           <div className="mono caps label">Current project</div>
           <div className="pname">{project?.name ?? "–"} <span className="mono small muted">rev {project?.revision ?? 0}</span></div>
@@ -88,12 +139,13 @@ export function Launcher({ results, project, open, running }: { results: Json; p
         <div className="cell">
           <div className="mono caps label">Checklist</div>
           {s ? <div className="counts">{(["pass", "fail", "attention", "review"] as const).map((k) =>
-            <span key={k} className={`pill ${k}`}>{s.checklist[k]} {k}</span>)}</div> : <span className="muted">{running ? "Running analysis…" : "–"}</span>}
+            <span key={k} className={`pill ${k}`}>{s.checklist[k]} {k}</span>)}</div> : <span className="muted">{running ? "Running analysis…" : "Not run yet"}</span>}
         </div>
         <div className="cell"><button className="btn primary wide" onClick={() => open("project")}>Open workspace</button></div>
-      </section>
+      </section>}
 
-      <div className="filters">
+      <div className="mono caps label" style={{ marginTop: 22 }}>Modules{!project && " · start or open a project to use them"}</div>
+      <div className="filters" style={{ marginTop: 6 }}>
         <div className="seg">
           <button className={filter === "all" ? "on" : ""} onClick={() => setFilter("all")}>All <b>{MODULES.length}</b></button>
           {GROUPS.map((g) => <button key={g.id} className={filter === g.id ? "on" : ""} onClick={() => setFilter(g.id)}>
@@ -118,7 +170,7 @@ export function Launcher({ results, project, open, running }: { results: Json; p
                   : st.attention ? <span className="pill attention">{st.attention} attention · {st.pass} pass</span>
                   : st.total ? <span className="pill pass">{st.pass} pass</span> : <span className="pill muted">No checks</span>}</div>
               </div>
-              <footer><button className="btn primary wide" onClick={() => open(m.id)}>Open</button></footer>
+              <footer><button className="btn primary wide" disabled={!project} title={project ? "" : "Start or open a project first"} onClick={() => open(m.id)}>Open</button></footer>
             </article>
           );
         })}

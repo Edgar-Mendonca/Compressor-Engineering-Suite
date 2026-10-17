@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type Json } from "./api";
 import { Launcher } from "./Launcher";
 import { GROUPS, MODULES, num } from "./modules";
+import { NewProject } from "./NewProject";
+import { STEPS, TutorialCard } from "./Tutorial";
 import * as P from "./pages/Pages";
 
 const RENDER: Record<string, (c: P.Ctx) => JSX.Element> = {
@@ -29,6 +31,9 @@ export default function App() {
   const [page, setPage] = useState<string>("home");
   const [savedId, setSavedId] = useState<number | null>(null);
   const [casing, setCasing] = useState(0);
+  const [wizard, setWizard] = useState(false);
+  const [tour, setTour] = useState<number | null>(null);
+  const [draft, setDraft] = useState<Json>(null);
   const [theme, setTheme] = useState<string>(() => store.get("centriforge.theme") ?? "auto");
 
   useEffect(() => {
@@ -57,23 +62,30 @@ export default function App() {
     }
   }, []);
 
+  // Start-up loads only the schema: no project and no analysis until the user picks one on the start page.
   useEffect(() => {
-    (async () => {
-      try {
-        const [s, d] = await Promise.all([api.schema(), api.defaults()]);
-        setSchema(s);
-        let start = d;
-        try {
-          const draft = store.get(DRAFT_KEY);
-          if (draft) start = { ...d, ...JSON.parse(draft) };
-        } catch { /* ignore */ }
-        setProjectState(start);
-        run(start);
-      } catch (e) {
-        setError(`Engineering server not reachable: ${(e as Error).message}.`);
-      }
-    })();
-  }, [run]);
+    api.schema().then(setSchema).catch((e) => setError(`Engineering server not reachable: ${(e as Error).message}.`));
+    try { const d = store.get(DRAFT_KEY); if (d) setDraft(JSON.parse(d)); } catch { /* ignore */ }
+  }, []);
+
+  const start = useCallback(async (p: Json, id: number | null = null, page = "project") => {
+    const d = await api.defaults();
+    setProject({ ...d, ...p });
+    setSavedId(id);
+    setResults(null);
+    setRanWith("");
+    setCasing(0);
+    setPage(page);
+  }, [setProject]);
+  const actions = {
+    newProject: () => setWizard(true),
+    openExample: async (key: string) => { setTour(null); start(await api.example(key)); },
+    tutorial: async () => { await start(await api.example("export_gas"), null, STEPS[0].page); setTour(0); },
+    openSaved: async (id: number) => { const rec = await api.getProject(id); start(rec.project, id); },
+    importFile: (p: Json) => start(p),
+    resume: draft ? () => start(draft) : null,
+    resumeName: draft?.name ?? "",
+  };
 
   const stale = useMemo(() => !!results && JSON.stringify(project) !== ranWith, [project, results, ranWith]);
   const ctx: P.Ctx = { schema, project, setProject, results, casing, setCasing, run, running, savedId, setSavedId,
@@ -89,7 +101,8 @@ export default function App() {
         </button>
         <nav className="tabs">
           <button className={page === "home" ? "on" : ""} onClick={() => open("home")}>Launcher</button>
-          <button className={page !== "home" ? "on" : ""} onClick={() => open(current ? current.id : "project")}>Workspace</button>
+          <button className={page !== "home" ? "on" : ""} disabled={!project} title={project ? "" : "Start or open a project first"}
+            onClick={() => open(current ? current.id : "project")}>Workspace</button>
         </nav>
         <span className="mono caps muted hide-sm">Compressor engineering suite</span>
         <span className="spacer" />
@@ -98,9 +111,11 @@ export default function App() {
           Theme · {theme}</button>
       </header>
 
-      {page === "home" ? (
+      {wizard && <NewProject onClose={() => setWizard(false)} onCreate={(p) => { setWizard(false); setTour(null); start(p); }} />}
+      {tour !== null && page !== "home" && <TutorialCard step={tour} setStep={setTour} open={open} run={() => project && run(project)} running={running} />}
+      {page === "home" || !project ? (
         <main className="home">{error && <div className="error">{error}</div>}
-          <Launcher results={results} project={project} open={open} running={running} /></main>
+          <Launcher results={results} project={project} open={open} running={running} actions={actions} /></main>
       ) : (
         <div className="app">
           <nav className="side" aria-label="Workflow">

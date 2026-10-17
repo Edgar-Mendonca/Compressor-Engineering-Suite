@@ -5,6 +5,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, ".."))
 hidden = collect_submodules("compsuite") + collect_submodules("uvicorn")
+hidden += ["matplotlib.backends.backend_agg", "matplotlib.backends.backend_svg", "matplotlib.backends.backend_pdf"]
 datas = [(os.path.join(ROOT, "frontend", "dist"), os.path.join("frontend", "dist"))]
 datas += collect_data_files("compsuite")
 try:

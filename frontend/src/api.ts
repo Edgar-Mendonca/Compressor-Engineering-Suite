@@ -24,6 +24,8 @@ async function req(method: string, url: string, body?: unknown): Promise<Json> {
 export const api = {
   health: () => req("GET", "/api/health"),
   appInfo: () => req("GET", "/api/app/info"),
+  examples: () => req("GET", "/api/examples"),
+  example: (key: string) => req("GET", `/api/examples/${key}`),
   updateCheck: () => req("GET", "/api/app/update"),
   updateApply: () => req("POST", "/api/app/update"),
   updateStatus: () => req("GET", "/api/app/update/status"),

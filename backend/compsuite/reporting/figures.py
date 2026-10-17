@@ -10,13 +10,18 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-INK = "#1f2933"
-GRID = "#d5dbe1"
-SERIES = ["#1f6fb2", "#d9822b", "#2e9e6b", "#c2414b", "#7b5ea7", "#8a8f98"]
+from compsuite.reporting.prism import FONT, PALETTES  # noqa: E402
 
-plt.rcParams.update({"font.size": 8.5, "axes.edgecolor": "#9aa5b1", "axes.labelcolor": INK, "xtick.color": INK,
-                     "ytick.color": INK, "axes.grid": True, "grid.color": GRID, "grid.linewidth": 0.6,
-                     "axes.spines.top": False, "axes.spines.right": False, "figure.dpi": 110})
+INK = "#000000"
+GRID = "#d9d9d9"
+SERIES = PALETTES["engineering"]
+
+# Report figures share the app's GraphPad Prism look: open axes, outward ticks, bold labels, no grid.
+plt.rcParams.update({"font.family": FONT, "font.size": 8.5, "axes.edgecolor": INK, "axes.labelcolor": INK,
+                     "axes.labelweight": "bold", "axes.linewidth": 1.2, "xtick.color": INK, "ytick.color": INK,
+                     "xtick.direction": "out", "ytick.direction": "out", "xtick.major.width": 1.2, "ytick.major.width": 1.2,
+                     "axes.grid": False, "axes.spines.top": False, "axes.spines.right": False, "legend.frameon": False,
+                     "lines.linewidth": 1.6, "figure.dpi": 110, "axes.prop_cycle": plt.cycler(color=SERIES)})
 
 
 def to_png_b64(fig) -> str:
