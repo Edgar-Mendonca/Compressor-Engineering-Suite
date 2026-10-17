@@ -1,5 +1,11 @@
 # Compressor Material Assessment
 
+> **New: integrated compressor engineering suite.** The [`suite/`](suite/README.md) folder contains an open-source,
+> browser-based platform for preliminary centrifugal compressor engineering (thermodynamics, selection and
+> performance maps, rotor and shaft design, bearings and seals, lateral and torsional rotordynamics, structural
+> checks, auxiliaries, optimisation, verification and reporting). It runs separately from this static app; see
+> [suite/README.md](suite/README.md). The material assessment app below is unchanged.
+
 This is a static browser app for checking **a selected material** against a recorded project case. The input sheet and figures in the reference image inspired the workflow. They are **example values and an illustrative domain drawing**, not built-in acceptance rules.
 
 ## Run locally

@@ -70,7 +70,7 @@ def _revolve(profile: list[tuple[float, float]], n: int = 48) -> list[np.ndarray
 
 
 def rotor_profile(rotor: dict, impellers: list[dict]) -> list[tuple[float, float]]:
-    """Closed outer (r, z) profile of shaft + impeller envelopes."""
+    """Closed outer (r, z) profile of the stepped shaft (impellers are revolved separately)."""
     pts = [(0.0, 0.0)]
     for s in rotor["sections"]:
         r = s["od_m"] / 2

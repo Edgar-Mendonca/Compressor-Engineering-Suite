@@ -54,32 +54,44 @@ def dgs_leakage(p_seal: float, ref_leak_nm3_h: float, ref_p: float, speed_ratio:
     return ref_leak_nm3_h * (p_seal / ref_p) ** 1.5 * speed_ratio**0.3
 
 
-def seal_gas_conditioning(gas, p_supply: float, T_supply: float, p_vent: float, margin_c: float) -> dict:
-    """Dew point and JT checks for primary seal gas taken from compressor discharge."""
+def seal_gas_conditioning(gas, p_supply: float, T_supply: float, p_vent: float, margin_c: float, n: int = 8) -> dict:
+    """Dew point and Joule-Thomson checks for primary seal gas along the
+    isenthalpic expansion path from supply to vent pressure.
+
+    Above the cricondenbar no dew point exists at supply pressure, so the
+    limiting value is the highest dew temperature found between vent and
+    supply pressure (API 692 practice: keep margin to the phase envelope
+    along the whole expansion path).
+    """
+    import numpy as np
     h = gas.h(T_supply, p_supply)
-    T_after = gas.T_from_hP(h, p_vent, T_supply)
-    try:
-        dews = gas.dew_points(p_supply)
-    except Exception:  # noqa: BLE001 - phase solver may fail near critical; report as unknown
-        dews = []
-    dew = max(dews) if dews else None
-    dews_vent = []
-    try:
-        dews_vent = gas.dew_points(max(p_vent, 1.1e5))
-    except Exception:  # noqa: BLE001
-        pass
+    path = []
+    T_guess = T_supply
+    for P in np.geomspace(p_supply, max(p_vent, 1.05e5), n):
+        T = gas.T_from_hP(h, P, T_guess)
+        T_guess = T
+        try:
+            dews = gas.dew_points(P)
+        except Exception:  # noqa: BLE001 - phase solver may fail near critical; report as unknown
+            dews = []
+        dew = max(dews) if dews else None
+        path.append({"P_bara": P / 1e5, "T_c": T - 273.15, "dew_c": dew - 273.15 if dew else None,
+                     "margin_c": (T - dew) if dew else None})
     wdp = gas.water_dew_point(p_supply) if hasattr(gas, "water_dew_point") else None
+    margins = [pt["margin_c"] for pt in path if pt["margin_c"] is not None]
+    hc_dew = max((pt["dew_c"] for pt in path if pt["dew_c"] is not None), default=None)
     out = {"supply_pressure_bara": p_supply / 1e5, "supply_temperature_c": T_supply - 273.15,
-           "temperature_after_expansion_c": T_after - 273.15,
-           "hydrocarbon_dew_point_c": dew - 273.15 if dew else None,
-           "water_dew_point_c": wdp - 273.15 if wdp else None,
-           "dew_point_at_vent_c": max(dews_vent) - 273.15 if dews_vent else None}
-    limiting = max([d for d in (out["hydrocarbon_dew_point_c"], out["water_dew_point_c"]) if d is not None], default=None)
+           "temperature_after_expansion_c": path[-1]["T_c"], "hydrocarbon_dew_point_c": hc_dew,
+           "water_dew_point_c": wdp - 273.15 if wdp else None, "expansion_path": path}
+    limiting = max([d for d in (hc_dew, out["water_dew_point_c"]) if d is not None], default=None)
+    min_path_margin = min(margins) if margins else None
+    if out["water_dew_point_c"] is not None:
+        wm = out["supply_temperature_c"] - out["water_dew_point_c"]
+        min_path_margin = wm if min_path_margin is None else min(min_path_margin, wm)
     out["required_supply_temperature_c"] = (limiting + margin_c) if limiting is not None else None
-    out["superheat_margin_c"] = (out["supply_temperature_c"] - limiting) if limiting is not None else None
-    out["heater_required"] = bool(limiting is not None and out["superheat_margin_c"] < margin_c)
-    out["condensation_risk_after_expansion"] = bool(out["dew_point_at_vent_c"] is not None and
-                                                    out["temperature_after_expansion_c"] < out["dew_point_at_vent_c"])
+    out["superheat_margin_c"] = min_path_margin
+    out["heater_required"] = bool(min_path_margin is not None and min_path_margin < margin_c)
+    out["condensation_risk_after_expansion"] = bool(min_path_margin is not None and min_path_margin < 0)
     return out
 
 
@@ -89,7 +101,8 @@ def seal_analysis(gas, sizing: dict, impellers: list[dict], project, rotor_geom:
                  [sd, sizing["stages"]],
                  assumptions=["Labyrinth discharge coefficient 0.71", "Balance piston upstream = discharge, downstream = suction",
                               "Wachel Bc = 3 (API 617 Level I)", "DGS leakage scaled ~ p^1.5 from the vendor reference point",
-                              "Seal gas taken from compressor discharge and filtered"],
+                              "Seal gas taken from compressor discharge and filtered",
+                              "Superheat margin evaluated along the isenthalpic expansion path to vent pressure"],
                  references=["Martin (1908); Hodkinson (1939); Egli (1935)", "API 617 8th ed. 2.6.5 Level I (modified Wachel)",
                              "API 692 (dry gas seal systems)", "API 614 Ch. 4 (seal gas modules)"])
     stages = sizing["stages"]
@@ -146,9 +159,9 @@ def seal_analysis(gas, sizing: dict, impellers: list[dict], project, rotor_geom:
         supply = 2 * (leak * rho_n / 3600 + lab_flow)
         cond = seal_gas_conditioning(gas, P_d, T_d, sd.seal_vent_pressure_bara * 1e5, sd.seal_gas_superheat_margin_c)
         if cond["heater_required"]:
-            rec.warn("Seal gas superheat margin below requirement: seal gas heater / conditioning skid required")
+            rec.warn("Seal gas superheat margin along the expansion path below requirement: heater / conditioning required")
         if cond["condensation_risk_after_expansion"]:
-            rec.warn("Seal gas may condense after expansion across the seal faces (JT cooling)")
+            rec.warn("Seal gas crosses the dew curve during expansion across the seal faces (JT cooling)")
         end.update({"seal_pressure_bara": seal_p / 1e5, "primary_leakage_nm3_h_per_seal": leak,
                     "primary_vent_total_nm3_h": 2 * leak, "process_labyrinth_flow_kg_s_per_seal": lab_flow,
                     "seal_gas_supply_kg_s_total": supply, "seal_gas_supply_nm3_h_total": supply / rho_n * 3600,

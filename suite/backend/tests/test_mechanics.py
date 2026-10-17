@@ -196,3 +196,20 @@ def test_piping_correlations():
     assert vc["choked"] and math.isclose(vc["Y"], 2 / 3)
     o = orifice_iso5167(5.0, 0.3, 0.6, 25.0, 1.1e-5, 1.3, 30e5)
     assert 0.59 < o["C"] < 0.62 and 0.98 < o["expansibility"] <= 1.0
+
+
+def test_rotor_fe_matches_ross():
+    """Independent cross-check against Petrobras ROSS (anisotropic, cross-coupled bearings, gyroscopics)."""
+    pytest.importorskip("ross")
+    from compsuite.rotordynamics.ross_adapter import ross_modal
+    brg = fe.constant_support(kxx=5e7, kyy=7e7, kxy=1e7, kyx=-1.5e7, cxx=2e4, cyy=3e4)
+    m = fe.RotorModel([fe.Section(0, 0.3, 0.06), fe.Section(0.3, 0.9, 0.08, 0.02), fe.Section(0.9, 1.2, 0.06)],
+                      [fe.PointMass("disk", 0.6, 100, 1.0, 0.5), fe.PointMass("d2", 1.15, 20, 0.2, 0.1)],
+                      [fe.Support("A", 0.1, brg), fe.Support("B", 1.0, brg)], E, G, RHO)
+    for w in (0.0, 1000.0):
+        ours = fe.modal(m, w, 4)["modes"]
+        ross = ross_modal(m, w, 8)  # ROSS also returns axial/torsional modes: match by frequency
+        for a in ours:
+            b = min(ross, key=lambda r: abs(r["freq_hz"] - a["freq_hz"]))
+            assert abs(a["freq_hz"] - b["freq_hz"]) / a["freq_hz"] < 1e-3
+            assert abs(a["logdec"] - b["logdec"]) < 2e-3
