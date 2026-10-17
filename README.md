@@ -1,16 +1,17 @@
 <p align="center">
-  <img src="docs/assets/banner.svg" alt="Compressor Engineering Suite" width="100%">
+  <img src="docs/assets/banner.svg" alt="CentriForge - compressor engineering suite" width="100%">
 </p>
 
 <p align="center">
+  <a href="https://github.com/Edgar-Mendonca/Compressor-Engineering-Suite/releases/latest"><img src="https://img.shields.io/github/v/release/Edgar-Mendonca/Compressor-Engineering-Suite?label=download&color=0b5cad" alt="Latest release"></a>
   <a href="https://github.com/Edgar-Mendonca/Compressor-Engineering-Suite/actions/workflows/ci.yml"><img src="https://github.com/Edgar-Mendonca/Compressor-Engineering-Suite/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/python-3.10%2B-1f6fb2" alt="Python 3.10+">
-  <img src="https://img.shields.io/badge/frontend-React%20%2B%20TypeScript-1f6fb2" alt="React + TypeScript">
-  <img src="https://img.shields.io/badge/scope-API%20617%20centrifugal-f0a03c" alt="API 617 centrifugal">
+  <img src="https://img.shields.io/badge/python-3.10%2B-0b5cad" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/frontend-React%20%2B%20TypeScript-0b5cad" alt="React + TypeScript">
+  <img src="https://img.shields.io/badge/scope-API%20617%20centrifugal-22b8e6" alt="API 617 centrifugal">
 </p>
 
-**Compressor Engineering Suite** is an open-source, browser-based platform for the preliminary design, selection,
-simulation and technical evaluation of industrial centrifugal compressors. Every module works on one shared
+**CentriForge** is an open-source compressor engineering suite, a Windows desktop app (or browser app) for the
+preliminary design, selection, simulation and technical evaluation of industrial centrifugal compressors. Every module works on one shared
 engineering model, so a change to the gas, an operating case, the shaft or a bearing propagates through
 thermodynamics, aerodynamics, mechanics, rotordynamics and verification in a single run.
 
@@ -26,6 +27,7 @@ Process → Thermodynamics → Selection & aerodynamics → Impellers → Rotor 
 > conclusions require review by a qualified engineer.
 
 <p align="center">
+  <img src="docs/images/launcher.png" alt="CentriForge launcher with version, updates and the 14 modules in workflow order" width="98%">
   <img src="docs/images/map.png" alt="Performance map with surge and stonewall limits and operating cases" width="49%">
   <img src="docs/images/rotor.png" alt="3D rotor with animated mode shape" width="49%">
   <img src="docs/images/lateral.png" alt="Campbell diagram, critical speed map and unbalance response" width="49%">
@@ -41,7 +43,7 @@ Process → Thermodynamics → Selection & aerodynamics → Impellers → Rotor 
 - [Validation](#validation)
 - [Project layout](#project-layout)
 - [Documentation](#documentation)
-- [Roadmap](#roadmap)
+- [Release plan](#release-plan)
 - [Contributing](#contributing)
 
 ## Feature status
@@ -67,12 +69,24 @@ Process → Thermodynamics → Selection & aerodynamics → Impellers → Rotor 
 | **Optimisation** | Parametric studies; normalised sensitivities; constrained COBYLA; configuration comparison; Pareto filter | Gradient-based multidisciplinary optimisation; multi-start/global search | OpenMDAO integration; design-of-experiments and surrogate models |
 | **Verification** | Checklist of every module's checks (pass, fail, attention, qualified review) with references; versioned criteria object | Edition-specific criteria files reviewed by a qualified engineer; API 618, 614 and 692 detail | Sign-off workflow with reviewer comments |
 | **Reports & data** | Datasheet; HTML and PDF reports; Excel workbook; JSON; STL and STEP; CalculiX decks; project revisions and calculation history | Word export; API datasheet form layout | Report templates per company; comparison report of several designs |
-| **Platform** | Python + FastAPI backend; React + TypeScript browser app; SQLite storage; CLI; CI on every push | User accounts and access control; background job queue for long studies | Docker image and one-click deploy; multi-project dashboards; desktop installer |
+| **Platform** | Windows desktop app with installer and one-click updates; launcher; Python + FastAPI backend; React + TypeScript app; SQLite storage; JSON project files; CLI; CI and release builds | User accounts and access control; background job queue for long studies | Docker image and one-click deploy; multi-project dashboards; macOS/Linux installers; code-signed installer |
 | **Machine types** | Centrifugal compressors (API 617 scope) | Reciprocating (API 618) and screw compressors | Axial compressors; pumps and steam turbines on the same rotordynamics core |
 
 ## Quick start
 
-### Easiest: one double-click
+### Windows: install the app (recommended)
+
+1. Open the [latest release](https://github.com/Edgar-Mendonca/Compressor-Engineering-Suite/releases/latest) and
+   download **`CentriForge-Setup-x.y.z.exe`**.
+2. Run it. It installs for your user only (no administrator rights) and adds Start-menu and desktop shortcuts.
+   Windows SmartScreen may warn because the installer is not code-signed: choose *More info → Run anyway*.
+3. Start **CentriForge**. It opens in its own window on the launcher page. No Python, Node.js or command line needed.
+
+**Updates:** the launcher checks GitHub Releases when it opens. When a newer version exists, click
+**UPDATE TO x.y.z**: it downloads the installer, installs silently and restarts CentriForge.
+Projects are stored in `Documents\CentriForge` and are never touched by updates or uninstalling.
+
+### From source: one double-click (Windows, macOS, Linux)
 
 1. Install **Python 3.10+** from [python.org](https://www.python.org/downloads/) (on Windows tick *Add python.exe to PATH*).
 2. Download this repository (**Code → Download ZIP**) and unzip it.
@@ -80,7 +94,6 @@ Process → Thermodynamics → Selection & aerodynamics → Impellers → Rotor 
 
 The first start creates a Python environment and installs the suite (a few minutes, needs internet). After that it
 starts in seconds and opens **http://127.0.0.1:8000** in your browser. Close the window to stop the server.
-The browser app is included pre-built, so Node.js is not needed.
 
 ### Manual setup (developers)
 
@@ -122,6 +135,8 @@ The first analysis runs automatically when the page opens (about 10–20 s). API
 compsuite example > project.json          # the example project, edit as needed
 compsuite run project.json --out results  # report.html, report.pdf, results.xlsx, results.json, rotor.stl
 ```
+
+**Desktop window from source:** `pip install -e ".[desktop]"`, then `centriforge`.
 
 **Frontend development** with hot reload: run `compsuite serve`, then `npm run dev` in `frontend/` and open
 `http://127.0.0.1:5173`.
@@ -199,9 +214,10 @@ backend/            Python engineering core (package "compsuite"), FastAPI serve
   compsuite/        thermo, compression, aero, impeller, mechanical, rotordynamics, bearings, seals,
                     torsional, structural, auxiliary, piping, materials, optimization, standards,
                     reporting, cad, api, core (model, workflow, storage, traceability)
-frontend/           React + TypeScript browser app (Plotly charts, Three.js rotor viewer)
+frontend/           React + TypeScript app: launcher, module pages, Plotly charts, Three.js viewers
 docs/               architecture, validation, library evaluation, roadmap, logo and screenshots
-.github/workflows/  CI: backend tests and frontend build
+packaging/          desktop app bundle (PyInstaller), Windows installer (Inno Setup), logo generator
+.github/workflows/  CI (tests, frontend build) and Release (Windows installer on version tags)
 ```
 
 ## Documentation
@@ -211,19 +227,23 @@ docs/               architecture, validation, library evaluation, roadmap, logo 
 - [Library evaluation](docs/LIBRARY_EVALUATION.md): the open-source projects considered, how each is used, licence notes
 - [Status and roadmap](docs/ROADMAP.md): what is implemented against the original proposal, and what is next
 
-## Roadmap
+## Release plan
 
-The 🚧 column of the [feature status](#feature-status) table is the backlog. Suggested order:
-
-| Priority | Work item | Why first |
+| Version | Theme | Main content |
 |---|---|---|
-| 1 | Edition-specific acceptance criteria, reviewed by a qualified rotating-equipment engineer | Every pass/fail result depends on them |
-| 2 | Mean-line aerodynamic model and vendor stage-curve import | Replaces the generic stage curves behind every map and operating point |
-| 3 | Bulk-flow seal coefficients and Level II stability | Completes the API 617 rotordynamic assessment |
-| 4 | Thermal (THD) bearing model or vendor bearing coefficients | Bearing temperatures are screening estimates today |
-| 5 | Reciprocating (API 618) and screw compressors | Extends the suite beyond centrifugal machines |
+| **0.2.0** ✅ | Standalone app | CentriForge name and logo, Windows installer, launcher page, one-click updates, new UI |
+| 0.3.0 | Material assessment | Per-stage sour/wet table, dew-point and SSC domain charts, corrosion acceptance by component, interactive cross-section, auto material selection, weld overlay, SOP/standstill logic, contaminants, material selection report |
+| 0.4.0 | Process, control and testing | Anti-surge control and recycle valve, ASME PTC 10 test conversion, API 614 oil and seal systems, gears (API 613) and couplings (API 671) |
+| 0.5.0 | Drivers and positive displacement | Motor/VFD, steam and gas turbines, reciprocating (API 618) and screw (API 619) compressors |
+| 0.6.0 | Advanced analysis and operations | 3D blade stress and SAFE diagram, mean-line aero, axial stages, Level II stability, THD bearings, API 686 installation, diagnostics, life-cycle cost |
 
-Section-by-section detail against the original proposal is in [docs/ROADMAP.md](docs/ROADMAP.md).
+The release notes are in [backend/compsuite/data/CHANGELOG.md](backend/compsuite/data/CHANGELOG.md); the
+launcher shows them too. Section-by-section detail against the original proposal is in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+**Publishing a release** (maintainers): set `__version__` and `RELEASE_DATE` in `backend/compsuite/__init__.py`, the
+version in `backend/pyproject.toml`, add a CHANGELOG section, rebuild `frontend/dist`, then
+`git tag vX.Y.Z && git push origin vX.Y.Z`. The *Release* workflow builds, self-tests and publishes the installer;
+installed apps then offer the update.
 
 ## Contributing
 

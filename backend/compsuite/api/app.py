@@ -1,13 +1,12 @@
 """FastAPI engineering backend.
 
 Run:  uvicorn compsuite.api.app:app --reload
-Data: COMPSUITE_DB (default ./compsuite.db). The built React frontend in
+Data: COMPSUITE_DB (default Documents/CentriForge/projects.db). The built React frontend in
 ``frontend/dist`` is served at ``/`` when present.
 """
 
 from __future__ import annotations
 
-import os
 import tempfile
 from collections import OrderedDict
 from pathlib import Path
@@ -19,9 +18,11 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from compsuite import __version__
+from compsuite import APP_NAME, __version__
+from compsuite.api.appinfo import router as appinfo_router
 from compsuite.cad.geometry import cadquery_available, rotor_step, rotor_stl, scene
 from compsuite.core.model import Project
+from compsuite.core.paths import database_path, resource_root
 from compsuite.core.storage import Store
 from compsuite.core.trace import input_hash, jsonable
 from compsuite.core.workflow import run_project
@@ -32,11 +33,12 @@ from compsuite.structural.calculix import rotor_axisymmetric_deck, rotor_beam_de
 from compsuite.thermo.backends import coolprop_available, make_gas
 from compsuite.thermo.components import COMPONENTS
 
-app = FastAPI(title="Compressor Engineering Suite", version=__version__,
+app = FastAPI(title=APP_NAME, version=__version__,
               description="Preliminary compressor engineering calculations. Not a certificate of compliance.")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-store = Store(os.environ.get("COMPSUITE_DB", "compsuite.db"))
+app.include_router(appinfo_router)
+store = Store(database_path())
 _cache: "OrderedDict[str, dict]" = OrderedDict()
 
 
@@ -342,14 +344,13 @@ def compare(req: CompareRequest):
 
 
 # ---------------------------------------------------------------- frontend
-_root = Path(__file__).resolve().parents[3]
-_dist = _root / "frontend" / "dist"
+_dist = resource_root() / "frontend" / "dist"
 _built = (_dist / "index.html").is_file() and (_dist / "assets").is_dir()
 if not _built:
     @app.get("/", include_in_schema=False)
     def frontend_missing():
         return HTMLResponse(
-            "<h2>Compressor Engineering Suite</h2><p>The API is running, but the browser app has not been built.</p>"
+            "<h2>CentriForge</h2><p>The API is running, but the browser app has not been built.</p>"
             "<p>Install Node.js 18+, then run:</p><pre>cd frontend\nnpm ci\nnpm run build</pre>"
             "<p>and restart <code>compsuite serve</code>. API docs: <a href='/docs'>/docs</a></p>")
 

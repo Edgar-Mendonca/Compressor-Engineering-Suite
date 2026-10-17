@@ -70,7 +70,7 @@ export function ProjectPage(c: Ctx) {
   return (
     <>
       <h2>Design basis</h2>
-      <p className="lead">Step 1 — define the project and the design basis. Fields left blank (“auto”) are estimated by the
+      <p className="lead">Define the project and the design basis. Fields left blank (“auto”) are estimated by the
         relevant module and reported in its trace.</p>
       <Disclaimer />
       <div className="card">
@@ -107,7 +107,7 @@ export function GasCasesPage(c: Ctx) {
   return (
     <>
       <h2>Gas composition & operating cases</h2>
-      <p className="lead">Step 2 — mole composition (normalised automatically), property model and all operating cases. The case
+      <p className="lead">Mole composition (normalised automatically), property model and all operating cases. The case
         marked “design” sizes the machine; every case is located on the performance map.</p>
       <div className="grid">
         <div className="card">
@@ -199,7 +199,7 @@ export function ThermoPage(c: Ctx) {
   return (
     <>
       <h2>Thermodynamics</h2>
-      <p className="lead">Step 3 — real-gas properties on the selected equation of state, phase behaviour and compression of every
+      <p className="lead">Real-gas properties on the selected equation of state, phase behaviour and compression of every
         operating case (numerical polytropic path, Schultz method for comparison).</p>
       <Kpis items={[["Molecular weight", fmt(g.mw, 2)], ["Z suction", fmt(st.Z, 4)], ["Density suction", `${fmt(st.rho, 2)} kg/m³`],
         ["cp/cv", fmt(st.k, 3)], ["Isentropic exponent", fmt(st.n_s, 3)], ["Speed of sound", `${fmt(st.sound, 0)} m/s`],
@@ -254,7 +254,7 @@ export function CompressorPage(c: Ctx) {
   return (
     <>
       <h2>Compressor selection & aerodynamic performance</h2>
-      <p className="lead">Step 4 — type selection, preliminary sizing (stages, speed, diameter, sections and casings), stage design and
+      <p className="lead">Type selection, preliminary sizing (stages, speed, diameter, sections and casings), stage design and
         the stage-stacked performance map with surge and stonewall limits.</p>
       <Kpis items={[["Configuration", sz.configuration], ["Recommended type", sz.type_selection.recommended],
         ["Speed", `${fmt(sz.speed_rpm, 0)} rpm`], ["Impeller D2", `${fmt(sz.impeller_diameter_m * 1e3, 0)} mm`],
@@ -342,7 +342,7 @@ export function ImpellerPage(c: Ctx) {
   return (
     <>
       <h2>Impeller geometry & stress</h2>
-      <p className="lead">Step 5 — impeller dimensions, blade configuration, mass and inertia, centrifugal and thermal stress
+      <p className="lead">Impeller dimensions, blade configuration, mass and inertia, centrifugal and thermal stress
         (axisymmetric rotating-disk FE) and axial thrust.</p>
       <div className="card">
         <Table rows={imps} cols={[["Imp.", (i) => String(i.index + 1)], ["D2 mm", (i) => i.D2_mm, 0], ["b2 mm", (i) => i.b2_mm],
@@ -391,7 +391,7 @@ export function RotorPage(c: Ctx) {
   return (
     <>
       <h2>Rotor assembly & shaft design</h2>
-      <p className="lead">Steps 6–7 — parametric stepped shaft with impellers, balance piston, seals, journals, thrust collar and
+      <p className="lead">Parametric stepped shaft with impellers, balance piston, seals, journals, thrust collar and
         coupling; mass properties, thrust balance, stresses, fatigue and deflection. Override the geometry in the shaft inputs below.</p>
       <Kpis items={[["Rotor mass", `${fmt(mp.mass_kg, 0)} kg`], ["Centre of gravity", `${fmt(mp.cg_m * 1e3, 0)} mm`],
         ["Ip / It(cg)", `${fmt(mp.ip_kgm2, 2)} / ${fmt(mp.it_cg_kgm2, 1)} kg·m²`], ["Bearing span", `${fmt(rot.bearing_span_m * 1e3, 0)} mm`],
@@ -473,7 +473,7 @@ export function BearingsSealsPage(c: Ctx) {
   return (
     <>
       <h2>Bearings & seals</h2>
-      <p className="lead">Step 8 & 11 — hydrodynamic journal bearings (short-bearing Reynolds solution with pad equilibrium),
+      <p className="lead">Hydrodynamic journal bearings (short-bearing Reynolds solution with pad equilibrium),
         thrust bearing, labyrinths, balance piston, aerodynamic cross-coupling and dry-gas-seal gas conditioning.</p>
       <div className="grid">
         <div className="card">
@@ -561,7 +561,7 @@ export function LateralPage(c: Ctx) {
   return (
     <>
       <h2>Lateral rotordynamics</h2>
-      <p className="lead">Step 9 — finite-element rotor (Timoshenko beams, gyroscopics, speed-dependent bearings), Campbell diagram,
+      <p className="lead">Finite-element rotor (Timoshenko beams, gyroscopics, speed-dependent bearings), Campbell diagram,
         undamped critical-speed map, unbalance response with API 617-style amplification factor / separation margin / amplitude
         checks, and Level I stability with modified-Wachel cross-coupling.</p>
       <Kpis items={[["Speed range", `${fmt(sp.min_rpm, 0)}–${fmt(sp.mcs_rpm, 0)} rpm`], ["Trip", `${fmt(sp.trip_rpm, 0)} rpm`],
@@ -638,7 +638,7 @@ export function TorsionalPage(c: Ctx) {
   return (
     <>
       <h2>Torsional vibration of the train</h2>
-      <p className="lead">Step 10 — driver, coupling(s), gearbox and compressor shaft line as a lumped model referred to compressor
+      <p className="lead">Driver, coupling(s), gearbox and compressor shaft line as a lumped model referred to compressor
         speed: natural frequencies, mode shapes, interference diagram with separation checks, forced response and stresses.</p>
       <div className="grid">
         <div className="card">
@@ -698,7 +698,7 @@ export function AuxPage(c: Ctx) {
   return (
     <>
       <h2>Lube oil & piping</h2>
-      <p className="lead">Step 12 — oil flow from bearing losses, pump, cooler and reservoir sizing (API 614 considerations); suction and
+      <p className="lead">Oil flow from bearing losses, pump, cooler and reservoir sizing (API 614 considerations); suction and
         discharge line sizing, compressible pressure drop, recycle valve (IEC 60534) and flow meter (ISO 5167); system curve.</p>
       <div className="grid">
         <div className="card"><h3>Lube oil system</h3>
@@ -847,7 +847,7 @@ export function OptimizePage(c: Ctx) {
   return (
     <>
       <h2>Engineering optimisation</h2>
-      <p className="lead">Step 13 — parametric studies, sensitivity analysis and constrained optimisation with the full workflow in the
+      <p className="lead">Parametric studies, sensitivity analysis and constrained optimisation with the full workflow in the
         loop (fast level: coarser bearing tables, damped modes and Level I stability). Each evaluation takes a few seconds.</p>
       {err && <div className="error">{err}</div>}
       <div className="card">
@@ -908,7 +908,7 @@ export function VerificationPage(c: Ctx) {
   return (
     <>
       <h2>Engineering verification</h2>
-      <p className="lead">Step 14 — every module's checks against the version-controlled criteria, with source, reference and status.
+      <p className="lead">Every module's checks against the version-controlled criteria, with source, reference and status.
         “Review” items are outside the software's scope and need qualified engineering review.</p>
       <Disclaimer />
       <Kpis items={[["Pass", String(n.pass)], ["Fail", String(n.fail)], ["Attention", String(n.attention)], ["For review", String(n.review)]]} />
@@ -966,7 +966,7 @@ export function ReportsPage(c: Ctx) {
   return (
     <>
       <h2>Reports, revisions & history</h2>
-      <p className="lead">Step 15 — technical documentation with datasheet, figures, checklist and full traceability; CAD and FE exports;
+      <p className="lead">Technical documentation with datasheet, figures, checklist and full traceability; CAD and FE exports;
         project revisions and calculation history stored on the server.</p>
       {err && <div className="error">{err}</div>}
       <div className="grid">
@@ -995,6 +995,21 @@ export function ReportsPage(c: Ctx) {
             const rec = await api.getProject(p.id); c.setSavedId(p.id); c.setProject(rec.project);
           }}>Open #{p.id}</button>)}
           <button className="btn" onClick={async () => { const d = await api.defaults(); c.setSavedId(null); c.setProject(d); }}>New from example</button>
+          <button className="btn" onClick={() => {
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(new Blob([JSON.stringify(c.project, null, 1)], { type: "application/json" }));
+            a.download = `${String(c.project.name).replace(/\s+/g, "_")}_rev${c.project.revision}.json`;
+            a.click();
+          }}>Export project file</button>
+          <label className="btn">Import project file
+            <input type="file" accept=".json,application/json" hidden onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              try { const p = JSON.parse(await f.text()); c.setSavedId(null); c.setProject({ ...(await api.defaults()), ...p }); }
+              catch (err) { alert(`Not a CentriForge project file: ${(err as Error).message}`); }
+              e.target.value = "";
+            }} />
+          </label>
         </div>
       </div>
     </>

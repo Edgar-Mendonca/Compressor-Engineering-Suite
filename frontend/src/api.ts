@@ -1,4 +1,4 @@
-// Thin client for the compsuite FastAPI backend.
+// Thin client for the CentriForge FastAPI backend.
 
 export type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -23,6 +23,10 @@ async function req(method: string, url: string, body?: unknown): Promise<Json> {
 
 export const api = {
   health: () => req("GET", "/api/health"),
+  appInfo: () => req("GET", "/api/app/info"),
+  updateCheck: () => req("GET", "/api/app/update"),
+  updateApply: () => req("POST", "/api/app/update"),
+  updateStatus: () => req("GET", "/api/app/update/status"),
   defaults: () => req("GET", "/api/defaults"),
   schema: () => req("GET", "/api/schema"),
   components: () => req("GET", "/api/components"),

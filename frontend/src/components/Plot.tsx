@@ -3,7 +3,7 @@ import { useEffect, useRef } from "react";
 import Plotly from "plotly.js-dist-min";
 import type { Json } from "../api";
 
-export const SERIES = ["#1f6fb2", "#d9822b", "#2e9e6b", "#c2414b", "#7b5ea7", "#8a8f98", "#0e8a91", "#b5487f"];
+export const SERIES = ["#0b5cad", "#d9822b", "#2e9e6b", "#c2414b", "#7b5ea7", "#8a8f98", "#0e8a91", "#b5487f"];
 
 function themeLayout(): Json {
   const css = getComputedStyle(document.documentElement);
@@ -12,7 +12,7 @@ function themeLayout(): Json {
   return {
     paper_bgcolor: "rgba(0,0,0,0)",
     plot_bgcolor: "rgba(0,0,0,0)",
-    font: { family: "system-ui, sans-serif", size: 11.5, color: ink },
+    font: { family: "IBM Plex Sans, Segoe UI, sans-serif", size: 11.5, color: ink },
     margin: { l: 58, r: 16, t: 28, b: 46 },
     xaxis: { gridcolor: line, zerolinecolor: line, linecolor: line },
     yaxis: { gridcolor: line, zerolinecolor: line, linecolor: line },

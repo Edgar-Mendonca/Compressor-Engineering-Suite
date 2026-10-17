@@ -1,4 +1,4 @@
-"""Compressor engineering suite.
+"""CentriForge - compressor engineering suite.
 
 Preliminary engineering calculations for industrial centrifugal compressors.
 Results support design studies and comparisons; they do not certify
@@ -14,4 +14,7 @@ import os as _os
 for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
     _os.environ.setdefault(_v, "1")
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
+APP_NAME = "CentriForge"
+RELEASE_DATE = "2026-10-17"
+GITHUB_REPO = "Edgar-Mendonca/Compressor-Engineering-Suite"

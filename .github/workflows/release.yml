@@ -1,0 +1,77 @@
+name: Release
+
+# Builds the Windows installer and publishes a GitHub Release when a version
+# tag is pushed:  git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Install app and build tools
+        run: pip install "./backend[coolprop,desktop]" pyinstaller
+      - name: Check tag matches app version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          V=$(python -c "import compsuite; print(compsuite.__version__)")
+          test "v$V" = "${GITHUB_REF_NAME}" || { echo "Tag ${GITHUB_REF_NAME} does not match version $V"; exit 1; }
+          echo "APP_VERSION=$V" >> "$GITHUB_ENV"
+      - name: Version for manual runs
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        shell: bash
+        run: echo "APP_VERSION=$(python -c 'import compsuite; print(compsuite.__version__)')" >> "$GITHUB_ENV"
+      - name: Bundle with PyInstaller
+        working-directory: packaging
+        run: pyinstaller --noconfirm centriforge.spec
+      - name: Self-test the bundle
+        working-directory: packaging
+        shell: bash
+        env:
+          CENTRIFORGE_HOME: ${{ runner.temp }}/cfhome
+        run: |
+          ./dist/CentriForge/CentriForge.exe --selftest
+          cat "$CENTRIFORGE_HOME/centriforge.log"
+          grep -q "selftest ok" "$CENTRIFORGE_HOME/centriforge.log"
+      - name: Build installer
+        working-directory: packaging
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup -y --no-progress }
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc "/DAppVersion=$env:APP_VERSION" centriforge.iss
+      - name: Release notes from the changelog
+        shell: bash
+        run: |
+          awk -v v="$APP_VERSION" '$0 ~ "^## "v {f=1; next} /^## / {f=0} f' backend/compsuite/data/CHANGELOG.md > notes.md
+          cat notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CentriForge-Setup-${{ env.APP_VERSION }}
+          path: packaging/Output/*.exe
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: CentriForge ${{ env.APP_VERSION }}
+          body_path: notes.md
+          files: packaging/Output/*.exe

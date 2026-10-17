@@ -144,3 +144,13 @@ def test_api_endpoints(tmp_path, monkeypatch):
     assert "*FREQUENCY" in r.text
     assert c.post("/api/studies/parametric", json={"project": proj, "variable": "bearings.preload", "values": [0.2],
                                                    "metrics": ["nope"]}).status_code == 422
+
+
+def test_app_info_and_changelog():
+    from compsuite import __version__
+    from compsuite.api.app import app
+    c = TestClient(app)
+    info = c.get("/api/app/info").json()
+    assert info["name"] == "CentriForge" and info["version"] == __version__
+    assert info["changelog"][0]["version"] == __version__ and info["changelog"][0]["items"]
+    assert c.post("/api/app/update").status_code == 400  # not the installed app

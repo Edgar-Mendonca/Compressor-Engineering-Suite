@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "compsuite"
-version = "0.1.0"
-description = "Open-source integrated compressor engineering, design, simulation and selection suite (preliminary engineering)."
+version = "0.2.0"
+description = "CentriForge: open-source integrated compressor engineering, design, simulation and selection suite (preliminary engineering)."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -27,16 +27,18 @@ coolprop = ["CoolProp>=6.6"]
 ross = ["ross-rotordynamics"]
 fluids = ["fluids"]
 cad = ["cadquery"]
+desktop = ["pywebview>=5"]
 test = ["pytest>=7", "httpx>=0.24"]
 
 [project.scripts]
 compsuite = "compsuite.cli:main"
+centriforge = "compsuite.desktop:main"
 
 [tool.setuptools.packages.find]
 include = ["compsuite*"]
 
 [tool.setuptools.package-data]
-compsuite = ["data/*.json"]
+compsuite = ["data/*.json", "data/CHANGELOG.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

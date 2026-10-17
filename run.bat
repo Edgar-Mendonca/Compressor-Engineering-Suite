@@ -1,5 +1,5 @@
 @echo off
-rem Compressor Engineering Suite - double-click to start.
+rem CentriForge - double-click to start.
 rem First run creates a Python environment and installs the suite.
 setlocal
 rem Avoid OpenBLAS per-thread buffer allocation failures on many-core PCs.
@@ -26,7 +26,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo Starting Compressor Engineering Suite at http://127.0.0.1:8000
+echo Starting CentriForge at http://127.0.0.1:8000
 echo Your browser opens automatically. Close this window to stop the server.
 echo.
 ".venv\Scripts\python.exe" -m compsuite.cli serve --open

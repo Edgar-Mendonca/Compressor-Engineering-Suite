@@ -5,3 +5,6 @@ __pycache__/
 compsuite-results/
 frontend/node_modules/
 .venv/
+packaging/build/
+packaging/dist/
+packaging/Output/

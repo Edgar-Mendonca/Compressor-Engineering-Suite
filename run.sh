@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Compressor Engineering Suite - start on macOS/Linux: ./run.sh
+# CentriForge - start on macOS/Linux: ./run.sh
 set -e
 cd "$(dirname "$0")/backend"
 [ -x .venv/bin/python ] || { echo "First run: creating the Python environment..."; python3 -m venv .venv; }
