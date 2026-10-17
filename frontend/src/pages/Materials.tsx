@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { api, fmt, type Json } from "../api";
 import { Plot, SERIES } from "../components/Plot";
 import { SchemaForm } from "../components/SchemaForm";
+import { safeName, saveFrom } from "../files";
 
 // Material assessment: per-location sour/wet service, SSC domains, corrosion acceptance,
 // automatic selection, weld overlay, SOP and contaminants. Results from materials/assessment.py.
@@ -93,15 +94,8 @@ export function MaterialsPage(c: Ctx) {
   const n = c.results?.casings?.reduce((a: number, k: Json) => a + k.impellers.impellers.length, 0) ?? 6;
   const report = async () => {
     setBusy(true);
-    try {
-      const r = await fetch("/api/export/material-selection.pdf", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: p, level: "full" }) });
-      if (!r.ok) throw new Error((await r.json()).detail ?? r.statusText);
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(await r.blob());
-      a.download = `${String(p.name).replace(/\s+/g, "_")}_material_selection.pdf`;
-      a.click();
-    } catch (e) { alert((e as Error).message); } finally { setBusy(false); }
+    try { await saveFrom("/api/export/material-selection.pdf", { project: p, level: "full" }, `${safeName(p.name)}_material_selection.pdf`); }
+    finally { setBusy(false); }
   };
 
   const dp = res?.charts?.dew_point, ssc = res?.charts?.ssc;

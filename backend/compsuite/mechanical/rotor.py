@@ -62,7 +62,9 @@ def build_rotor(project, sizing: dict, stages: list[dict], impellers: list[dict]
         span = L_j + 0.10 + 2 * end_zone + sum(pitches) + section_gap + n_bp_len
         if sd.shaft_diameter_at_impellers_mm:
             break
-        d_new = _round_up(max(d_torsion, span / SLENDERNESS))
+        # Slenderness sets the shaft, but never beyond a hub that still leaves an impeller
+        # (hub <= 0.5 D2); a longer rotor is then flagged by the span/D check instead.
+        d_new = _round_up(max(d_torsion, min(span / SLENDERNESS, 0.4 * D2)))
         if d_imp and abs(d_new - d_imp) < 1e-9:
             break
         d_imp = d_new

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type Json } from "./api";
 import { GROUPS, MODULES, groupOf, num } from "./modules";
+import { bridge, recent } from "./files";
 
 const ago = (t: number) => {
   const m = Math.round((Date.now() / 1000 - t) / 60);
@@ -47,13 +48,15 @@ function UpdatePanel({ info }: { info: Json }) {
   );
 }
 
-type StartActions = { newProject: () => void; openExample: (key: string) => void; tutorial: () => void;
+type StartActions = { openFile: (path?: string) => void; newProject: () => void; openExample: (key: string) => void; tutorial: () => void;
   openSaved: (id: number) => void; importFile: (p: Json) => void; resume: (() => void) | null; resumeName: string };
 
 function StartPanel({ a }: { a: StartActions }) {
   const [ex, setEx] = useState<Json[]>([]);
   const [saved, setSaved] = useState<Json[]>([]);
+  const [auto, setAuto] = useState<Json>(null);
   useEffect(() => {
+    fetch("/api/autosave").then((r) => r.json()).then((d) => setAuto(d.saved ? d : null)).catch(() => undefined);
     api.examples().then(setEx).catch(() => setEx([]));
     api.projects().then(setSaved).catch(() => setSaved([]));
   }, []);
@@ -63,7 +66,10 @@ function StartPanel({ a }: { a: StartActions }) {
         <div className="mono caps label">Start</div>
         <button className="btn primary wide big-btn" onClick={a.newProject}>New project</button>
         <p className="muted small">Guided setup: name, driver, gas and design case. Everything else starts from sensible defaults.</p>
-        <label className="btn wide">Import project file
+        <button className="btn wide" onClick={() => a.openFile()}>Open project file…</button>
+        {auto && <button className="btn wide" style={{ marginTop: 8 }} onClick={() => a.importFile(auto.project)}>
+          Recover autosave · {auto.project?.name} · {new Date(auto.saved * 1000).toLocaleString()}</button>}
+        <label className="btn wide" style={{ display: "none" }}>Import project file
           <input type="file" accept=".json,application/json" hidden onChange={async (e) => {
             const f = e.target.files?.[0];
             if (!f) return;
@@ -84,10 +90,13 @@ function StartPanel({ a }: { a: StartActions }) {
       <div className="cell">
         <div className="mono caps label">Learn</div>
         <button className="excard" onClick={a.tutorial}>
-          <b>Guided tutorial</b><span className="muted">Walks through all 14 modules on the export gas example: what to enter, how to read each result.</span>
+          <b>Guided tutorial</b><span className="muted">Walks through all 15 modules on the export gas example: what to enter, how to read each result.</span>
           <span><span className="pill blue">12 steps</span> <span className="pill blue">10 min</span></span>
         </button>
-        <div className="mono caps label" style={{ marginTop: 14 }}>Recent projects</div>
+        {bridge() && recent().length > 0 && <><div className="mono caps label" style={{ marginTop: 14 }}>Recent files</div>
+          <div className="recent">{recent().slice(0, 5).map((r) => <button key={r.path} onClick={() => a.openFile(r.path)} title={r.path}>
+            <b>{r.name}</b><span className="mono small muted">{new Date(r.t).toLocaleDateString()}</span></button>)}</div></>}
+        <div className="mono caps label" style={{ marginTop: 14 }}>Saved in the project database</div>
         {saved.length === 0 ? <p className="muted small">Saved projects appear here (Reports & projects → Save project).</p>
           : <div className="recent">{saved.slice(0, 6).map((p) => (
             <button key={p.id} onClick={() => a.openSaved(p.id)}><b>{p.name}</b><span className="mono small muted">rev {p.current_revision} · {String(p.updated).slice(0, 10)}</span></button>))}</div>}

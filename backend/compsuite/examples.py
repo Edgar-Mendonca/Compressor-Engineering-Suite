@@ -31,6 +31,7 @@ def sour_reinjection() -> Project:
     # Heavy, wet sour gas: lower tip speed and Mach limits keep inlet Mach and impeller stress acceptable.
     p.design_basis.max_tip_speed_m_s = 240.0
     p.design_basis.max_machine_mach = 0.8
+    p.design_basis.max_impellers_per_casing = 6
     return p
 
 

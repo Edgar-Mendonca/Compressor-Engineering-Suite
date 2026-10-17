@@ -51,18 +51,8 @@ export const api = {
 };
 
 export async function download(kind: string, project: Json) {
-  const res = await fetch(`/api/export/${kind}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project, level: "full" }),
-  });
-  if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText);
-  const blob = await res.blob();
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `${String(project.name).replace(/\s+/g, "_")}_rev${project.revision}_${kind}`;
-  a.click();
-  URL.revokeObjectURL(a.href);
+  const { saveFrom, safeName } = await import("./files");
+  return saveFrom(`/api/export/${kind}`, { project, level: "full" }, `${safeName(project.name)}_rev${project.revision}_${kind}`);
 }
 
 export const fmt = (v: unknown, nd = 1): string => {

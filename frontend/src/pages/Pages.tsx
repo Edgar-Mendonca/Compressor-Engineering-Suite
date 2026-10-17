@@ -3,6 +3,8 @@ import { api, download, fmt, type Json } from "../api";
 import { Plot, SERIES } from "../components/Plot";
 import { FIELDS, ImpellerFEAView, SectionPlot } from "../components/ImpellerFEAView";
 import { RotorView } from "../components/RotorView";
+import { Fea3D } from "../components/Fea3D";
+import { saveProject } from "../files";
 import { SchemaForm } from "../components/SchemaForm";
 
 export type Ctx = {
@@ -370,6 +372,7 @@ export function ImpellerPage(c: Ctx) {
         </div>
       </div>
       {k.impeller_fea && <ImpellerFEA fea={k.impeller_fea} />}
+      <Fea3D project={c.project} results={c.results} casing={c.casing} />
       <Trace trace={k.impellers.trace} />
       <Trace trace={k.impeller_stress.trace} />
       {k.impeller_fea && <Trace trace={k.impeller_fea.trace} />}
@@ -852,11 +855,7 @@ export function ReportsPage(c: Ctx) {
   const dl = async (kind: string) => {
     setBusy(kind); setErr("");
     try {
-      if (kind === "report.html") {
-        const res = await fetch("/api/export/report.html", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project: c.project, level: "full" }) });
-        const w = window.open("", "_blank");
-        if (w) { w.document.write(await res.text()); w.document.close(); }
-      } else await download(kind, c.project);
+      await download(kind, c.project);
     } catch (e) { setErr((e as Error).message); } finally { setBusy(""); }
   };
   const save = async () => {
@@ -905,12 +904,7 @@ export function ReportsPage(c: Ctx) {
             const rec = await api.getProject(p.id); c.setSavedId(p.id); c.setProject(rec.project);
           }}>Open #{p.id}</button>)}
           <button className="btn" onClick={async () => { const d = await api.defaults(); c.setSavedId(null); c.setProject(d); }}>New from example</button>
-          <button className="btn" onClick={() => {
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(new Blob([JSON.stringify(c.project, null, 1)], { type: "application/json" }));
-            a.download = `${String(c.project.name).replace(/\s+/g, "_")}_rev${c.project.revision}.json`;
-            a.click();
-          }}>Export project file</button>
+          <button className="btn" onClick={() => saveProject(c.project, null)}>Export project file</button>
           <label className="btn">Import project file
             <input type="file" accept=".json,application/json" hidden onChange={async (e) => {
               const f = e.target.files?.[0];

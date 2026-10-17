@@ -45,9 +45,12 @@ def impeller_geometry(stage: dict, D2: float, U2: float, m_dot: float, shaft_d: 
 
     # Eye diameter for minimum inlet relative velocity. A hub that leaves no room
     # (very small, high-speed stages on a thick shaft) is reported by the checks.
-    lo, hi = hub_d * 1.05, max(0.85 * D2, hub_d * 1.15)
+    # The eye stays within 0.75 D2 (shrouded impeller practice): a stage whose flow needs a
+    # larger eye is flow-limited (high inlet Mach / cm1) and flagged by the checks.
+    hub_d = min(hub_d, 0.5 * D2)
+    lo, hi = hub_d * 1.05, max(0.75 * D2, hub_d * 1.1)
     res = minimize_scalar(w1_tip, bounds=(lo, hi), method="bounded")
-    D1 = float(res.x)
+    D1 = min(float(res.x), 0.75 * D2)
     cm1 = Q_in / (math.pi / 4 * (D1**2 - hub_d**2))
     sigma = wiesner_slip(BLADES, BACKSWEEP_DEG)
     phi2 = OUTLET_CM_RATIO
@@ -75,7 +78,8 @@ def impeller_geometry(stage: dict, D2: float, U2: float, m_dot: float, shaft_d: 
             "inlet_relative_mach": res.fun / max(stage.get("sound_in", 1e9), 1.0),
             "mass_kg": mass, "ip_kgm2": ip, "it_kgm2": it, "axial_length_mm": axial_len * 1e3,
             "bore_hoop_stress_mpa": sig_bore / 1e6, "average_hoop_stress_mpa": sig_avg / 1e6,
-            "max_tip_speed_for_material_m_s": tip_speed_capability}
+            "max_tip_speed_for_material_m_s": tip_speed_capability, "eye_limited": D1 >= 0.75 * D2 - 1e-6,
+            "eye_tip_ratio": D1 / D2, "hub_tip_ratio": hub_d / D2}
 
 
 def axial_thrust(stage: dict, geom: dict, omega: float, m_dot: float, reaction: float = 0.6, core_rotation: float = 0.5) -> float:

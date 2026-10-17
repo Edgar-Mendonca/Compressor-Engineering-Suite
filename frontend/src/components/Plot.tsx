@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../api";
+import { saveBlob } from "../files";
 
 // Charts are drawn by the backend with matplotlib in a GraphPad Prism style and
 // shown as SVG. This component adds the data cursor, the chart editor and exports.
@@ -117,11 +118,7 @@ export function Plot({ data, layout, height = 340 }: { data: Json[]; layout?: Js
     } else {
       blob = await (await post(`/api/plot/export/${fmt}`, { ...body, dpi: Number(opts.dpi ?? 600) })).blob();
     }
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `${name}.${fmt}`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    await saveBlob(blob, `${name}.${fmt}`);
   };
 
   const meta = res?.meta;

@@ -240,3 +240,22 @@ tr.click { cursor: pointer; }
 .legend .sw { display: inline-block; width: 12px; height: 12px; margin: 0 4px 0 10px; border: 1px solid #3b4652; vertical-align: -2px; }
 @media (max-width: 1100px) { .detail { grid-template-columns: 1fr; } }
 .detail .form { grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+
+/* File menu and toasts */
+.filemenu { position: relative; display: flex; align-items: stretch; border-right: 1px solid var(--line); }
+.filemenu .tab-btn { border-left: 0; }
+.menu { position: absolute; top: 100%; left: 0; z-index: 60; min-width: 280px; background: var(--panel); border: 1px solid var(--line-2); box-shadow: 0 10px 30px rgba(0,0,0,.15); padding: 4px 0; }
+.menu button { display: flex; justify-content: space-between; gap: 14px; width: 100%; border: 0; background: none; color: var(--ink); text-align: left; padding: 8px 14px; font: 13.5px var(--sans); cursor: pointer; }
+.menu button:hover:not(:disabled) { background: var(--panel-2); color: var(--accent); }
+.menu button:disabled { opacity: .45; }
+.menu button span { color: var(--muted); font: 11px var(--mono); }
+.menu .sep { padding: 8px 14px 2px; border-top: 1px solid var(--line); margin-top: 4px; }
+.toasts { position: fixed; left: 18px; bottom: 18px; z-index: 70; display: grid; gap: 8px; max-width: min(560px, calc(100vw - 36px)); }
+.toast { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--panel); border: 1px solid var(--line-2); border-left: 3px solid var(--pass); padding: 10px 12px; box-shadow: 0 8px 24px rgba(0,0,0,.15); }
+.toast.err { border-left-color: var(--fail); } .toast > div { flex: 1; min-width: 200px; word-break: break-all; }
+
+/* FEA Pro and shop tests */
+.probe { border: 1px solid var(--line); background: var(--panel-2); padding: 10px 12px; min-width: 0; max-height: 460px; overflow: auto; }
+.gauge { background: #0b1220; color: #7CC69B; padding: 4px 10px; font-size: 12px; }
+.rface { width: 100%; max-width: 240px; height: auto; background: #fff; border: 1px solid var(--line); }
+.runup { width: 100%; height: auto; background: #fff; border: 1px solid var(--line); }

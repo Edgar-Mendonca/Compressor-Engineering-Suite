@@ -234,7 +234,7 @@ packaging/          desktop app bundle (PyInstaller), Windows installer (Inno Se
 |---|---|---|
 | **0.2.0** ✅ | Standalone app | CentriForge name and logo, Windows installer, launcher page, one-click updates, new UI |
 | **0.3.0** ✅ | Start page, charts, materials | Fast start, start page (new project, examples, tutorial), GraphPad Prism-style charts with editor and exports, rebuilt material assessment with material selection report |
-| 0.4.0 | Impeller FEA Pro | 3D cyclic-sector blade model, pressure/thermal/shrink-fit loads, modal analysis and SAFE diagram, overspeed with plasticity, fatigue, probe and path tools, ParaView export |
+| **0.4.0** ✅ | Impeller FEA Pro, shop tests, files | 3D cyclic-sector impeller FEA (loads, plastic overspeed, modes/SAFE, fatigue, viewer, exports), API 617 shop-test simulator with animations, rotor thrust, Save As and project files |
 | 0.5.0 | Performance and testing | Stage loss models, multistage matching, PTC 10 field and shop test analysis, troubleshooting (handbook ch. 3–4) |
 | 0.6.0 | Anti-surge and control | Control line, recycle valve sizing, multistage anti-surge law, trip transients |
 | 0.7.0 | Bearings, seals and lube | THD bearings, thrust bearing design, seal selection, API 614 systems |

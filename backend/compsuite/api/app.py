@@ -115,6 +115,28 @@ def defaults():
     return Project().model_dump()
 
 
+@app.post("/api/autosave")
+def autosave(project: Project):
+    from compsuite.core.paths import data_dir
+    import json
+    import time
+    (data_dir() / "autosave.cfproj").write_text(json.dumps({"saved": time.time(), "project": project.model_dump()}), encoding="utf-8")
+    return {"ok": True}
+
+
+@app.get("/api/autosave")
+def autosave_get():
+    from compsuite.core.paths import data_dir
+    import json
+    f = data_dir() / "autosave.cfproj"
+    if not f.is_file():
+        return {"saved": None}
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except ValueError:
+        return {"saved": None}
+
+
 @app.get("/api/examples")
 def examples():
     from compsuite.examples import catalogue
@@ -416,6 +438,98 @@ def compare(req: CompareRequest):
     if req.metrics:
         _check_metrics(req.metrics)
     return jsonable(_studies().compare_configurations(req.projects, req.metrics))
+
+
+# ---------------------------------------------------------------- 3D impeller FEA and shop tests
+class FEARequest(BaseModel):
+    project: Project
+    casing: int = 0
+    impeller: int = 0
+    opts: dict[str, Any] = Field(default_factory=dict)
+
+
+_fea_cache: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _fea(req: FEARequest) -> tuple[dict, dict]:
+    import hashlib
+    import json
+    from compsuite.structural.impeller3d import analyse
+    res = _run_cached(req.project, "full")
+    try:
+        cas = res["casings"][req.casing]
+        imp = cas["impellers"]["impellers"][req.impeller]
+    except (IndexError, KeyError) as exc:
+        raise HTTPException(404, "No such casing / impeller") from exc
+    st = next(s for s in res["sizing"]["stages"] if s["index"] == imp["index"])
+    key = hashlib.sha1(json.dumps([input_hash(req.project), req.casing, req.impeller, req.opts], sort_keys=True, default=str).encode()).hexdigest()
+    if key not in _fea_cache:
+        opts = {"bore_mm": cas["rotor"]["shaft_diameter_impellers_m"] * 1e3, **req.opts}
+        _fea_cache[key] = analyse(imp, st, cas["_imp_mat"], cas["lateral"]["speeds"], opts)
+        while len(_fea_cache) > 4:
+            _fea_cache.popitem(last=False)
+    return _fea_cache[key], cas
+
+
+@app.post("/api/fea3d")
+def fea3d(req: FEARequest):
+    return jsonable(_fea(req)[0])
+
+
+@app.post("/api/fea3d/export/{fmt}")
+def fea3d_export(fmt: Literal["vtu", "inp", "pdf"], req: FEARequest):
+    from compsuite.reporting import prism
+    from compsuite.structural import impeller3d as I
+    r, cas = _fea(req)
+    name = f"{req.project.name.replace(' ', '_')}_impeller{r['impeller']}"
+    if fmt == "vtu":
+        return Response(I.to_vtu(r), media_type="application/xml", headers={"Content-Disposition": f'attachment; filename="{name}.vtu"'})
+    if fmt == "inp":
+        return Response(I.to_calculix(r, cas["_imp_mat"], cas["lateral"]["speeds"]["mcs_rpm"]), media_type="text/plain",
+                        headers={"Content-Disposition": f'attachment; filename="{name}_ccx.inp"'})
+    from compsuite.structural.impeller3d_report import fea_report
+    with prism._LOCK:
+        pdf = fea_report(req.project, r)
+    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}_fea.pdf"'})
+
+
+class ShopTestRequest(BaseModel):
+    project: Project
+    casing: int = 0
+    residual: Optional[dict[str, Any]] = None      # {impeller|plane, angles_deg, amplitudes, trial_g_mm}
+    influence: Optional[dict[str, Any]] = None     # {initial, trials}
+    running_readings: list[dict[str, Any]] = Field(default_factory=list)
+    overspeed_measured: list[dict[str, Any]] = Field(default_factory=list)
+    overspeed_allowable_um: dict[str, float] = Field(default_factory=dict)
+
+
+@app.post("/api/shoptest")
+def shoptest(req: ShopTestRequest):
+    from compsuite.testing import shoptest as T
+    res = _run_cached(req.project, "full")
+    cas = res["casings"][req.casing]
+    sp = cas["lateral"]["speeds"]
+    n = sp["mcs_rpm"]
+    imps = cas["impellers"]["impellers"]
+    comp = [{"component": f"Impeller {i['index'] + 1}", "mass_kg": i["mass_kg"], **T.allowable_unbalance(i["mass_kg"], n)} for i in imps]
+    loads = cas["lateral"].get("bearing_static_loads_n") or {"Journal 1": 1e3, "Journal 2": 1e3}
+    planes = [{"plane": k, "static_load_kg": abs(L) / 9.81, **T.allowable_unbalance(abs(L) / 9.81, n)} for k, L in loads.items()]
+    crit = cas["lateral"]["stability"].get("first_critical_rigid_rpm", n)
+    out = {"speeds": sp, "component_balance": comp, "rotor_balance": planes, "rotor_class": T.rotor_class(n, crit),
+           "running_test": T.running_test(sp, cas["lateral"], req.running_readings), "thrust": cas.get("thrust")}
+    if req.residual:
+        r = req.residual
+        allow = r.get("allowable_g_mm") or planes[0]["governing_g_mm"]
+        out["residual_check"] = T.residual_unbalance_check(r["angles_deg"], r["amplitudes"], r["trial_g_mm"], allow)
+    if req.influence and req.influence.get("trials"):
+        out["influence"] = T.influence_balance(req.influence["initial"], req.influence["trials"])
+    pred = {}
+    cached = [v for v in _fea_cache.values()]
+    if cached:
+        s = cached[-1]["summary"]
+        pred = {"Bore": s["permanent_bore_growth_um"], "Eye": s["permanent_eye_growth_um"], "Tip": s["permanent_tip_growth_um"]}
+    out["overspeed"] = T.overspeed_record(pred, req.overspeed_measured, req.overspeed_allowable_um)
+    return jsonable(out)
 
 
 # ---------------------------------------------------------------- charts

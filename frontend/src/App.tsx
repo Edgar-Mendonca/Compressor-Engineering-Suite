@@ -3,6 +3,8 @@ import { api, type Json } from "./api";
 import { Launcher } from "./Launcher";
 import { GROUPS, MODULES, num } from "./modules";
 import { NewProject } from "./NewProject";
+import { bridge, onToast, openProject, recent, saveProject, type Toast } from "./files";
+import { ShopTestsPage } from "./pages/ShopTests";
 import { STEPS, TutorialCard } from "./Tutorial";
 import * as P from "./pages/Pages";
 
@@ -11,7 +13,7 @@ const RENDER: Record<string, (c: P.Ctx) => JSX.Element> = {
   compressor: (c) => <P.CompressorPage {...c} />, impellers: (c) => <P.ImpellerPage {...c} />, rotor: (c) => <P.RotorPage {...c} />,
   bearings: (c) => <P.BearingsSealsPage {...c} />, lateral: (c) => <P.LateralPage {...c} />, torsional: (c) => <P.TorsionalPage {...c} />,
   materials: (c) => <P.MaterialsPage {...c} />, aux: (c) => <P.AuxPage {...c} />, optimize: (c) => <P.OptimizePage {...c} />,
-  verify: (c) => <P.VerificationPage {...c} />, reports: (c) => <P.ReportsPage {...c} />,
+  shoptest: (c) => <ShopTestsPage {...c} />, verify: (c) => <P.VerificationPage {...c} />, reports: (c) => <P.ReportsPage {...c} />,
 };
 
 const DRAFT_KEY = "compsuite.draft.v1";
@@ -34,6 +36,9 @@ export default function App() {
   const [wizard, setWizard] = useState(false);
   const [tour, setTour] = useState<number | null>(null);
   const [draft, setDraft] = useState<Json>(null);
+  const [filePath, setFilePath] = useState<string | null>(null);
+  const [menu, setMenu] = useState(false);
+  const [toasts, setToasts] = useState<(Toast & { id: number })[]>([]);
   const [theme, setTheme] = useState<string>(() => store.get("centriforge.theme") ?? "auto");
 
   useEffect(() => {
@@ -68,6 +73,18 @@ export default function App() {
     try { const d = store.get(DRAFT_KEY); if (d) setDraft(JSON.parse(d)); } catch { /* ignore */ }
   }, []);
 
+  useEffect(() => onToast((t) => {
+    const id = Date.now() + Math.random();
+    setToasts((x) => [...x, { ...t, id }]);
+    setTimeout(() => setToasts((x) => x.filter((q) => q.id !== id)), t.path ? 12000 : 5000);
+  }), []);
+  // Autosave every 2 minutes (recovered from the start page after a crash).
+  useEffect(() => {
+    if (!project) return;
+    const t = setInterval(() => { fetch("/api/autosave", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(project) }).catch(() => undefined); }, 120000);
+    return () => clearInterval(t);
+  }, [project]);
+
   const start = useCallback(async (p: Json, id: number | null = null, page = "project") => {
     const d = await api.defaults();
     setProject({ ...d, ...p });
@@ -76,13 +93,26 @@ export default function App() {
     setRanWith("");
     setCasing(0);
     setPage(page);
+    setFilePath(null);
   }, [setProject]);
+  const fileSave = async (as: boolean) => { if (project) { const p = await saveProject(project, as ? null : filePath); if (p) setFilePath(p); } setMenu(false); };
+  const fileOpen = async (path?: string) => {
+    setMenu(false);
+    const r = await openProject(path);
+    if (r) { await start(r.project); setFilePath(r.path); }
+  };
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); fileSave(e.shiftKey); } };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  });
   const actions = {
     newProject: () => setWizard(true),
     openExample: async (key: string) => { setTour(null); start(await api.example(key)); },
     tutorial: async () => { await start(await api.example("export_gas"), null, STEPS[0].page); setTour(0); },
     openSaved: async (id: number) => { const rec = await api.getProject(id); start(rec.project, id); },
     importFile: (p: Json) => start(p),
+    openFile: fileOpen,
     resume: draft ? () => start(draft) : null,
     resumeName: draft?.name ?? "",
   };
@@ -99,6 +129,17 @@ export default function App() {
         <button className="brand" onClick={() => open("home")} aria-label="Launcher">
           <img src="/favicon.svg" alt="" width="24" height="24" /><b>CENTRI<span>FORGE</span></b>
         </button>
+        <div className="filemenu">
+          <button className="tab-btn" onClick={() => setMenu(!menu)}>File ▾</button>
+          {menu && <div className="menu" onMouseLeave={() => setMenu(false)}>
+            <button onClick={() => { setMenu(false); open("home"); }}>New / examples…</button>
+            <button onClick={() => fileOpen()}>Open project…</button>
+            <button disabled={!project} onClick={() => fileSave(false)}>Save<span>Ctrl+S</span></button>
+            <button disabled={!project} onClick={() => fileSave(true)}>Save as…<span>Ctrl+Shift+S</span></button>
+            {bridge() && recent().length > 0 && <><div className="mono caps muted sep">Recent files</div>
+              {recent().map((r) => <button key={r.path} onClick={() => fileOpen(r.path)} title={r.path}>{r.name}<span>{r.path.split(/[\\/]/).slice(-2, -1)[0]}</span></button>)}</>}
+          </div>}
+        </div>
         <nav className="tabs">
           <button className={page === "home" ? "on" : ""} onClick={() => open("home")}>Launcher</button>
           <button className={page !== "home" ? "on" : ""} disabled={!project} title={project ? "" : "Start or open a project first"}
@@ -111,6 +152,10 @@ export default function App() {
           Theme · {theme}</button>
       </header>
 
+      <div className="toasts">{toasts.map((t) => (
+        <div key={t.id} className={`toast ${t.error ? "err" : ""}`}><div><b>{t.text}</b>{t.path && <div className="mono small">{t.path}</div>}</div>
+          {t.path && bridge() && <><button className="chip" onClick={() => bridge()!.open_path(t.path!)}>Open file</button>
+            <button className="chip" onClick={() => bridge()!.reveal(t.path!)}>Show in folder</button></>}</div>))}</div>
       {wizard && <NewProject onClose={() => setWizard(false)} onCreate={(p) => { setWizard(false); setTour(null); start(p); }} />}
       {tour !== null && page !== "home" && <TutorialCard step={tour} setStep={setTour} open={open} run={() => project && run(project)} running={running} />}
       {page === "home" || !project ? (
@@ -135,7 +180,7 @@ export default function App() {
               <span className="crumb mono caps">{current && `${num(current.id)} · ${current.label}`}</span>
               <input className="title" aria-label="Project name" value={project?.name ?? ""}
                 onChange={(e) => project && setProject({ ...project, name: e.target.value })} />
-              <span className="muted mono small">rev {project?.revision ?? 0}{savedId ? ` · saved #${savedId}` : " · unsaved draft"}</span>
+              <span className="muted mono small" title={filePath ?? ""}>rev {project?.revision ?? 0}{filePath ? ` · ${filePath.split(/[\\/]/).pop()}` : savedId ? ` · saved #${savedId}` : " · unsaved draft"}</span>
               <span className="spacer" />
               {results && results.casings?.length > 1 && (
                 <select className="inp" value={casing} onChange={(e) => setCasing(Number(e.target.value))} aria-label="Casing">

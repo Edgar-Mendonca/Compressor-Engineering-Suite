@@ -131,6 +131,7 @@ class SealDesign(BaseModel):
 
 class TrainDesign(BaseModel):
     driver_inertia_kgm2: Optional[float] = None
+    coupling_type: Literal["disc", "diaphragm", "gear"] = Field("disc", description="Gear couplings transmit friction thrust")
     coupling_torsional_stiffness_nm_rad: Optional[float] = None
     coupling_inertia_kgm2: Optional[float] = None
     gear_ratio: float = Field(1.0, description="Compressor speed / driver speed (1 = direct drive)")

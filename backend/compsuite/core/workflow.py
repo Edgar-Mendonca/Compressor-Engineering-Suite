@@ -40,6 +40,7 @@ from compsuite.seals.seals import seal_analysis
 from compsuite.standards.checklist import build_checklist
 from compsuite.structural.disk import impeller_stress
 from compsuite.structural.impeller_fea import impeller_fea
+from compsuite.mechanical.thrust import thrust_analysis
 from compsuite.thermo.backends import make_gas
 from compsuite.torsional.train import build_train, torsional_analysis
 
@@ -158,7 +159,9 @@ def run_project(project, level: str = "full") -> dict:
         stress = impeller_stress(imps["impellers"], stages, imp_mat, lateral["speeds"], project.criteria)
         fea = impeller_fea(imps["impellers"], stages, imp_mat, lateral["speeds"], project.criteria) if level == "full" else None
         casings.append({"stages": idxs, "impellers": imps, "rotor": rotor, "bearings": tables, "bearing_rated": rated,
-                        "static": static, "shaft": shaft, "seals": seals, "lateral": lateral, "impeller_stress": stress, "impeller_fea": fea,
+                        "static": static, "shaft": shaft, "seals": seals, "lateral": lateral, "impeller_stress": stress, "impeller_fea": fea, "_imp_mat": imp_mat,
+                        "thrust": thrust_analysis(rotor, imps["impellers"], stages, lateral["speeds"], sizing.get("mass_flow_kg_s", 0.0),
+                                                  project.train.coupling_type),
                         "mass_properties": model.mass_properties(), "_model": model, "_shaft_material": shaft_mat})
     res["casings"] = casings
     res["material_assessment"] = material_assessment(gas, sizing, project,
