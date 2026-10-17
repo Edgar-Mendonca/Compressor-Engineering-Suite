@@ -1,60 +1,103 @@
-# Compressor Material Assessment
+# Compressor Engineering Suite
 
-> **New: integrated compressor engineering suite.** The [`suite/`](suite/README.md) folder contains an open-source,
-> browser-based platform for preliminary centrifugal compressor engineering (thermodynamics, selection and
-> performance maps, rotor and shaft design, bearings and seals, lateral and torsional rotordynamics, structural
-> checks, auxiliaries, optimisation, verification and reporting). It runs separately from this static app; see
-> [suite/README.md](suite/README.md). The material assessment app below is unchanged.
+Open-source, browser-based platform for preliminary design, selection,
+simulation and evaluation of industrial centrifugal compressors (API 617
+scope), built so every module shares one engineering data model and responds
+to design changes:
 
-This is a static browser app for checking **a selected material** against a recorded project case. The input sheet and figures in the reference image inspired the workflow. They are **example values and an illustrative domain drawing**, not built-in acceptance rules.
+Process → thermodynamics → selection & aerodynamics → impellers → rotor &
+shaft → bearings & seals → lateral & torsional rotordynamics → structural →
+auxiliaries → optimisation → verification → documentation.
 
-## Run locally
+> **Scope and limits.** Results support preliminary engineering, design
+> studies and comparisons. The software does **not** certify compliance with
+> API 617, API 614, API 692, ISO 15156 or any other standard. Acceptance
+> criteria are configurable and must be verified against the edition that
+> applies to the job. Detailed design and safety-critical conclusions require
+> qualified engineering review.
 
-1. Unzip the package and open the `compressor-material-assessment-local` folder in VS Code.
-2. Start **Live Server** from `index.html`, or open a terminal in the folder and run:
+## Quick start
 
-   ```sh
-   python -m http.server 8000
-   ```
+```sh
+# Backend (Python 3.10+)
+cd backend
+pip install -e ".[test,coolprop,cad]"   # coolprop and cad (CadQuery) are optional
+pytest                                  # validation and integration tests
+compsuite serve                         # http://127.0.0.1:8000  (API docs at /docs)
 
-3. Open <http://localhost:8000> in a modern browser. There is no installation or internet dependency. Opening `index.html` directly with `file://` may block JavaScript modules in some browsers; use a local server.
+# Frontend (Node 18+)
+cd frontend
+npm ci
+npm run build        # FastAPI then serves the app at http://127.0.0.1:8000
+# or, for development with hot reload (backend running on :8000):
+npm run dev          # http://127.0.0.1:5173
+```
 
-## GitHub Pages and phone use
+Command line without the browser:
 
-- Upload the **contents** of the unzipped `compressor-material-assessment-local` folder to the root of your GitHub repository, including `index.html`, all three `.css` files, and the `.mjs` files. You may leave out `tests/` and `README.md` when publishing.
-- In the repository, open **Settings → Pages**, select **Deploy from a branch**, choose your branch and `/ (root)`, then save. Open the resulting Pages URL on your phone.
-- On a phone, tap a stage to reveal its input fields. Swipe inside a chart or tap **Expand** to explore it. The calculated-results table can also be scrolled sideways within its panel.
-- Browser storage is tied to the site address. A case saved under `localhost` will not automatically appear at the GitHub Pages address or on another device. Export its JSON locally, then import it at the Pages address if you want to move it.
+```sh
+compsuite example > project.json        # edit as needed
+compsuite run project.json --out results/
+# writes results.json, report.html, report.pdf, results.xlsx, rotor.stl
+```
 
-## First run
+Optional external tools are picked up automatically: CalculiX (`ccx`) for
+the FE deck cross-checks and ROSS (`pip install ross-rotordynamics`) for the
+rotordynamics cross-check.
 
-- The **Assessment** tab starts with six editable example stages and example material names. These material records have blank service limits, so the initial result is **Evidence needed**.
-- Enter pressure (absolute bar), temperature, gas mole percentages, aqueous pH where wet, corrosion rate from your own assessment, water status, and sources. Provide the settled-out / standstill (SOP) case, minimum design metal temperature (MDMT), contaminants, service life, and a case design-basis reference.
-- For a stage or SOP declared dry within 10 °C of the estimated water dew point, record the dry-condition justification in the adjacent field. This is an evidence check, not an automated wet/dry prediction.
-- In **Material library**, add or edit each component material, actual wetted surface and product form. Enter limits supported by a document and mark the record reviewed only after checking it.
-- Document a dry-service H₂S limit if any stages or SOP are dry. Wet-service limits, aqueous pH and assessed corrosion rates apply where liquid water is confirmed.
-- Return to **Assessment** and choose the material for each component. Expand **View assessment checks** for breaches, missing evidence, and completed checks.
-- The dashboard includes water condensation, illustrative SSC domains, water exposure, H₂S by stage, corrosion allowance, and a component decision map. Hover, tap or use keyboard controls to inspect points. All six charts export SVG/PNG. The SSC domains D0–D3 describe the **plotted environment only**. They do not certify a grade.
-- In **Calculation methods**, inspect a live worked stage and the equations, thresholds, decision order and limits of the assessment.
-- Use **Presentation report** to review a printable case summary with components and graphs, then **Print / Save PDF** in your browser.
-- Save named cases in the browser. **Export case JSON** includes the case and material library for backup or transfer. **Import case JSON** brings both into the current browser. **Export results CSV** provides a tabular summary.
+## What the example project shows
 
-## Decision meanings
+The default project is a 60 kg/s natural-gas compressor, 30 → 90 bara. A full
+run (about 10 s) produces: a 4-impeller straight-through machine at
+~15,000 rpm, 352 mm impellers, ~11.1 MW shaft power, a 427 kg rotor on
+tilting-pad bearings with one well-separated critical speed above trip and a
+Level I log decrement of 0.71, and a checklist with two findings to act on
+(turndown case surge margin 6.6 % → anti-surge recycle needed; first torsional
+mode 9.6 % below minimum speed vs 10 % required → coupling selection).
 
-| Result | Meaning |
-| --- | --- |
-| Outside recorded limits | At least one entered exposure or condition exceeds a recorded material limit. |
-| Evidence needed | No recorded limit is breached, but information or a reviewed material source is missing. |
-| Within recorded limits · conditional | All required inputs for the assessed wet/dry exposure fit the entered and reviewed material limits. Engineering sign-off is still needed. |
+## Workflow in the browser
 
-The calculation uses ideal gas partial pressures. Water saturation uses a limited Antoine estimate valid for water dew points 0–100 °C. The +10 °C line is a visualization of approach, not a proof that a metal surface is dry. Corrosion rate is **not predicted**: enter independently assessed rates and relevant material loss allowances. Product standards, SSC qualification, fabrication, coatings, phase behavior, mechanical strength, and API 617 / ISO 15156 compliance require separate documented engineering review. A material name alone never passes.
+| Step | Page | Content |
+|---|---|---|
+| 1 | Design basis | Project, design limits, acceptance criteria |
+| 2 | Gas & operating cases | Composition, property model, cases (design case marked) |
+| 3 | Thermodynamics | Properties, property charts, phase envelope, case compression |
+| 4 | Selection & performance | Type, sizing, stage design, map with surge/stonewall and cases |
+| 5 | Impellers | Geometry, mass/inertia, thrust, disk stress |
+| 6–7 | Rotor & shaft | 3D rotor with mode animation, sections, masses, stresses, fatigue |
+| 8, 11 | Bearings & seals | K/C vs speed, film, losses, thrust, labyrinths, Wachel, seal gas |
+| 9 | Lateral rotordynamics | Campbell, UCS map, unbalance response, API checks, stability |
+| 10 | Torsional train | Interference diagram, modes, forced response, stresses |
+| 12 | Lube oil & piping | Oil system, line sizing, valve, meter, system curve |
+| – | Materials | Database, temperature derating, screening |
+| 13 | Optimisation | Parametric study, sensitivity, constrained optimisation |
+| 14 | Verification | Checklist with criteria, values, status and references |
+| 15 | Reports & projects | HTML/PDF/Excel/JSON, STL/STEP, CalculiX decks, revisions, history |
 
-The component decision map displays recorded verdicts, not a numeric risk score. The corrosion chart displays entered wet-stage rates against the chosen component record and uses `rate × assessment life` for each plotted loss; it does not add stage losses or calculate time at each condition.
+## Documentation
 
-## Local data
+* [Architecture](docs/ARCHITECTURE.md) — data model, workflow, numerics, extension points
+* [Validation](docs/VALIDATION.md) — reference cases and tolerances checked by the tests
+* [Library evaluation](docs/LIBRARY_EVALUATION.md) — the 15 proposed open-source projects: role, status, licence notes
+* [Status and roadmap](docs/ROADMAP.md) — proposal sections vs. implementation, next steps
 
-Inputs, named cases and material records are stored in `localStorage` for the browser and origin used. Use **Export case JSON** as a backup before clearing browser storage or moving to another computer. No cloud service is used.
+## Repository layout
 
-## Check calculation tests
+| Path | Content |
+|---|---|
+| `backend/` | Python engineering core (`compsuite`), FastAPI server, tests |
+| `frontend/` | Browser application (React, TypeScript, Plotly, Three.js) |
+| `docs/` | Architecture, validation, library evaluation, roadmap |
+| `apps/material-assessment/` | Static Material Assessment app (no build step) |
 
-If Node.js is installed, run `node tests/engine.test.mjs` from this folder. Tests cover incomplete records, a conditional documented case, limit breaches and missing wet-case evidence. The app itself does not require Node.js.
+## Material Assessment app
+
+`apps/material-assessment/` records documented material service limits and
+evidence for sour/wet service (ISO 15156-style checks against user-entered,
+reviewed limits). The suite's material module performs screening only and
+refers to this app for the evidence record. Run it with any static server:
+
+```sh
+cd apps/material-assessment && python -m http.server 8080   # http://localhost:8080
+node apps/material-assessment/tests/engine.test.mjs          # its tests
+```

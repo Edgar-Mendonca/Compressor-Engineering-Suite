@@ -2,7 +2,7 @@
 
 Run:  uvicorn compsuite.api.app:app --reload
 Data: COMPSUITE_DB (default ./compsuite.db). The built React frontend in
-``suite/frontend/dist`` is served at ``/`` when present.
+``frontend/dist`` is served at ``/`` when present.
 """
 
 from __future__ import annotations
@@ -342,7 +342,12 @@ def compare(req: CompareRequest):
 
 
 # ---------------------------------------------------------------- frontend
-_dist = Path(__file__).resolve().parents[3] / "frontend" / "dist"
+_root = Path(__file__).resolve().parents[3]
+_material_app = _root / "apps" / "material-assessment"
+if _material_app.is_dir():
+    app.mount("/material-assessment", StaticFiles(directory=_material_app, html=True), name="material-assessment")
+
+_dist = _root / "frontend" / "dist"
 if _dist.is_dir():
     app.mount("/assets", StaticFiles(directory=_dist / "assets"), name="assets")
 

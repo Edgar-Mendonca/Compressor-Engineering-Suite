@@ -1,8 +1,7 @@
 # Architecture
 
 ```
-suite/
-  backend/compsuite/        Python engineering core + FastAPI
+backend/compsuite/          Python engineering core + FastAPI
     core/        model.py (shared data model), workflow.py (pipeline), storage.py (SQLite),
                  trace.py (traceability), units.py
     thermo/      components, Peng-Robinson EOS, CoolProp backend adapter
@@ -24,8 +23,9 @@ suite/
     reporting/   figures (matplotlib), HTML/PDF report, Excel workbook, datasheet
     cad/         Three.js scene description, STL, STEP (CadQuery)
     api/app.py   FastAPI routes; serves the built frontend
-  frontend/      React + TypeScript (Vite), Plotly charts, Three.js rotor viewer
-  docs/          this folder
+frontend/                   React + TypeScript (Vite), Plotly charts, Three.js rotor viewer
+apps/material-assessment/   static sour/wet-service material evidence app (no build step)
+docs/                       this folder
 ```
 
 ## Shared engineering data model

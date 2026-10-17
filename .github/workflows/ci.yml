@@ -1,10 +1,8 @@
-name: Engineering suite
+name: CI
 
 on:
   push:
-    paths: ["suite/**", ".github/workflows/suite.yml"]
   pull_request:
-    paths: ["suite/**", ".github/workflows/suite.yml"]
 
 jobs:
   backend:
@@ -17,9 +15,9 @@ jobs:
       - name: Install CalculiX (used by the FE cross-check test)
         run: sudo apt-get update && sudo apt-get install -y calculix-ccx
       - name: Install package
-        run: pip install -e "suite/backend[test,coolprop]"
+        run: pip install -e "backend[test,coolprop]"
       - name: Tests
-        working-directory: suite/backend
+        working-directory: backend
         run: pytest -q
 
   frontend:
@@ -30,7 +28,17 @@ jobs:
         with:
           node-version: "22"
       - name: Install and build
-        working-directory: suite/frontend
+        working-directory: frontend
         run: |
           npm ci
           npm run build
+
+  material-assessment:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Engine tests
+        run: node apps/material-assessment/tests/engine.test.mjs

@@ -1,7 +1,7 @@
 # Validation record
 
-Every entry below is an automated test in `suite/backend/tests/`. Run them
-with `pytest` from `suite/backend`. Tests that need an optional engine
+Every entry below is an automated test in `backend/tests/`. Run them
+with `pytest` from `backend`. Tests that need an optional engine
 (CoolProp, CalculiX, ROSS, CadQuery) are skipped when it is not installed;
 the CI workflow installs CoolProp and CalculiX.
 
