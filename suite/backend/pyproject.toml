@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "compsuite"
+version = "0.1.0"
+description = "Open-source integrated compressor engineering, design, simulation and selection suite (preliminary engineering)."
+readme = "../README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "pydantic>=2.5",
+  "fastapi>=0.110",
+  "uvicorn>=0.25",
+  "pandas>=2.0",
+  "openpyxl>=3.1",
+  "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+# Optional engines. Each one is used through an adapter when installed and
+# the built-in method is used otherwise. Review licences before bundling.
+coolprop = ["CoolProp>=6.6"]
+ross = ["ross-rotordynamics"]
+fluids = ["fluids"]
+cad = ["cadquery"]
+test = ["pytest>=7", "httpx"]
+
+[project.scripts]
+compsuite = "compsuite.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["compsuite*"]
+
+[tool.setuptools.package-data]
+compsuite = ["data/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
