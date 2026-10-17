@@ -87,7 +87,7 @@ export default function App() {
   return (
     <div className="app">
       <nav className="side" aria-label="Workflow">
-        <h1>Compressor Engineering Suite</h1>
+        <h1><img src="/favicon.svg" alt="" width="28" height="28" />Compressor Engineering Suite</h1>
         {groups.map((g) => (
           <div key={g}>
             <div className="group">{g}</div>

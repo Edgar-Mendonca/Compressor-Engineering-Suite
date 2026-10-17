@@ -2,9 +2,9 @@
 screening-level material selection.
 
 Selection here is a *screening* step (temperature range, strength need,
-sour-service hardness availability, corrosion notes). The repository's
-browser-based Material Assessment app is the tool for recording and
-checking documented service limits and evidence for a chosen material.
+sour-service hardness availability, corrosion notes). Documented service
+limits and qualification evidence for the chosen material must be recorded
+and checked separately.
 """
 
 from __future__ import annotations
@@ -85,5 +85,5 @@ def screen_materials(use: str, max_temp_c: float, min_temp_c: float, ph2s_bar: f
                      "sour_note": m["sour_note"], "corrosion": m["corrosion"]})
     rows.sort(key=lambda r: (not r["suitable"], -r["score"]))
     if wet:
-        rec.warn("Wet service: confirm corrosion rates and allowances in the Material Assessment app")
+        rec.warn("Wet service: confirm corrosion rates and allowances in the project material records")
     return {"use": use, "sour": sour, "candidates": rows, "trace": rec}

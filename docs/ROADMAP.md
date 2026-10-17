@@ -17,7 +17,7 @@ Legend: **Done** = implemented and tested in this repository ·
 | 9 Structural FEA | Partial | Rotating disk FE (centrifugal + thermal, overspeed, burst margin), CalculiX beam and axisymmetric decks | 3D impeller FEA, casing FEA, structural optimisation |
 | 10 Lube oil & auxiliaries | Partial | Oil flow, pump, cooler (LMTD), reservoir, viscosity (ASTM D341) | Pressure-drop network, accumulators, rundown tank, control oil |
 | 11 Piping & flow | Done | Pipe sizing, Colebrook, isothermal compressible ΔP, IEC 60534 gas valve sizing, ISO 5167 orifice, system vs compressor curve | Pulsation/acoustics; anti-surge dynamics |
-| 12 Materials | Partial | 14-material database, temperature derating, screening (temperature, strength, sour hardness), links to the Material Assessment app | Certified data sources, corrosion-rate models, impact-test rules |
+| 12 Materials | Partial | 14-material database, temperature derating, screening (temperature, strength, sour hardness) | Certified data sources, corrosion-rate models, impact-test rules |
 | 13 Optimisation | Done | Parametric studies, normalised sensitivity, constrained COBYLA, configuration comparison, Pareto filter | Gradient-based MDO (OpenMDAO), multi-start/global methods |
 | 14 Visualisation | Done | Interactive maps, property charts, phase envelope, Campbell, UCS map, unbalance, mode shapes, 3D rotor with mode animation, torsional plots, stress plots, bearing/seal plots | Dashboards across multiple projects |
 | 15 Standards & verification | Partial | Versioned criteria object, checklist with pass/fail/attention/review, traceability records | Edition-specific criteria files reviewed by a qualified engineer; API 618/614/692 detail |

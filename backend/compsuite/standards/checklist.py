@@ -137,7 +137,7 @@ def build_checklist(project, res: dict) -> dict:
         items.append(_item("Materials", f"{use.title()} material '{sel['key']}' screening", "Temperature range, sour availability, strength",
                            ", ".join(k for k, v in sel["checks"].items() if not v) or "all screening checks met",
                            sel["suitable"], "ISO 15156 / API 617", "materials",
-                           "Record documented limits in the Material Assessment app"))
+                           "Record documented service limits and evidence for this material"))
     lube = res.get("lube")
     if lube:
         items.append(_item("Auxiliaries", "Oil cooler temperature approach", "No temperature cross",

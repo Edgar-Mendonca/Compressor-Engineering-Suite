@@ -343,10 +343,6 @@ def compare(req: CompareRequest):
 
 # ---------------------------------------------------------------- frontend
 _root = Path(__file__).resolve().parents[3]
-_material_app = _root / "apps" / "material-assessment"
-if _material_app.is_dir():
-    app.mount("/material-assessment", StaticFiles(directory=_material_app, html=True), name="material-assessment")
-
 _dist = _root / "frontend" / "dist"
 if _dist.is_dir():
     app.mount("/assets", StaticFiles(directory=_dist / "assets"), name="assets")

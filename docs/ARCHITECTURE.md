@@ -24,7 +24,6 @@ backend/compsuite/          Python engineering core + FastAPI
     cad/         Three.js scene description, STL, STEP (CadQuery)
     api/app.py   FastAPI routes; serves the built frontend
 frontend/                   React + TypeScript (Vite), Plotly charts, Three.js rotor viewer
-apps/material-assessment/   static sour/wet-service material evidence app (no build step)
 docs/                       this folder
 ```
 

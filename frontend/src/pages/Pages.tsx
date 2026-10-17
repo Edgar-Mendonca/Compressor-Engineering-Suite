@@ -714,8 +714,8 @@ export function MaterialsPage(c: Ctx) {
     <>
       <h2>Materials</h2>
       <p className="lead">Engineering material database with temperature-dependent properties and screening for shaft, impeller and
-        casing service (temperature range, strength, sour-service hardness limits). Record documented service limits and evidence
-        in the <a href="/material-assessment/" target="_blank" rel="noopener">Material Assessment app</a>.</p>
+        casing service (temperature range, strength, sour-service hardness limits). Screening only: record documented service
+        limits and evidence for the selected materials in your project's material records.</p>
       {db && <div className="notice">{db._notice}</div>}
       <div className="grid">
         {(["shaft", "impeller", "casing"] as const).map((use) => (
