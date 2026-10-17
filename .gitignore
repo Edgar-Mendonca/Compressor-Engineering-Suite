@@ -1,0 +1,7 @@
+__pycache__/
+*.egg-info/
+*.db
+.pytest_cache/
+compsuite-results/
+frontend/node_modules/
+frontend/dist/
