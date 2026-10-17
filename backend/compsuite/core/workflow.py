@@ -29,6 +29,7 @@ from compsuite.compression.process import evaluate_case
 from compsuite.core.trace import input_hash, record
 from compsuite.core.units import k_to_c
 from compsuite.impeller.geometry import impeller_set
+from compsuite.materials.assessment import material_assessment
 from compsuite.materials.database import at_temperature, screen_materials
 from compsuite.mechanical.rotor import build_rotor, fe_model
 from compsuite.mechanical.shaft import shaft_integrity
@@ -38,6 +39,7 @@ from compsuite.rotordynamics.lateral import lateral_analysis
 from compsuite.seals.seals import seal_analysis
 from compsuite.standards.checklist import build_checklist
 from compsuite.structural.disk import impeller_stress
+from compsuite.structural.impeller_fea import impeller_fea
 from compsuite.thermo.backends import make_gas
 from compsuite.torsional.train import build_train, torsional_analysis
 
@@ -108,6 +110,7 @@ def run_project(project, level: str = "full") -> dict:
         scr["selected"] = sel
         mats[use] = scr
     res["materials"] = mats
+    res["material_assessment"] = material_assessment(gas, sizing, project)
 
     # Steps 5-11 per casing.
     casings = []
@@ -154,8 +157,9 @@ def run_project(project, level: str = "full") -> dict:
         lateral = lateral_analysis(model, rotor, sizing, project, seals["total_wachel_q_n_m"]) if level == "full" else \
             _lateral_fast(model, rotor, sizing, project, seals["total_wachel_q_n_m"])
         stress = impeller_stress(imps["impellers"], stages, imp_mat, lateral["speeds"], project.criteria)
+        fea = impeller_fea(imps["impellers"], stages, imp_mat, lateral["speeds"], project.criteria) if level == "full" else None
         casings.append({"stages": idxs, "impellers": imps, "rotor": rotor, "bearings": tables, "bearing_rated": rated,
-                        "static": static, "shaft": shaft, "seals": seals, "lateral": lateral, "impeller_stress": stress,
+                        "static": static, "shaft": shaft, "seals": seals, "lateral": lateral, "impeller_stress": stress, "impeller_fea": fea,
                         "mass_properties": model.mass_properties(), "_model": model, "_shaft_material": shaft_mat})
     res["casings"] = casings
     res["_gas"] = gas

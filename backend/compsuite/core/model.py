@@ -192,6 +192,39 @@ class Criteria(BaseModel):
     seal_balance_piston_leakage_max_pct: float = 3.0
 
 
+class MaterialRecord(BaseModel):
+    """Documented service limits for one component's wetted material (None = not recorded)."""
+    component: str
+    material: str
+    wetted_surface: str = ""
+    evidence_reference: str = ""
+    verified: bool = False
+    min_temp_c: Optional[float] = None
+    max_temp_c: Optional[float] = None
+    max_hardness_hrc: Optional[float] = None
+    measured_hardness_hrc: Optional[float] = None
+    max_wet_ph2s_bar: Optional[float] = None
+    max_dry_ph2s_bar: Optional[float] = None
+    max_pco2_bar: Optional[float] = None
+    min_ph: Optional[float] = None
+    max_chloride_ppm: Optional[float] = None
+    corrosion_allowance_mm: float = 3.0
+    corrosion_resistant: bool = False
+
+
+class MaterialAssessment(BaseModel):
+    water_content_ppmv: float = Field(500.0, description="Used when H2O is not in the gas composition")
+    liquid_water_assumed: bool = Field(False, description="Treat every location as wet (conservative)")
+    measured_ph: Optional[float] = Field(None, description="None = estimated condensed-water pH")
+    chloride_ppm: Optional[float] = None
+    mdmt_c: float = -29.0
+    service_life_years: float = 25.0
+    sop_pressure_bara: Optional[float] = Field(None, description="Settle-out pressure; None = estimated")
+    sop_temperature_c: float = 15.0
+    sop_exposure_fraction: float = Field(0.05, description="Share of service life spent at settle-out (corrosion)")
+    records: list[MaterialRecord] = Field(default_factory=list, description="Empty = defaults from the selected materials")
+
+
 class Project(BaseModel):
     name: str = "Example export gas compressor"
     description: str = "Single-casing centrifugal compressor, preliminary study"
@@ -211,6 +244,7 @@ class Project(BaseModel):
     piping: PipingDesign = Field(default_factory=PipingDesign)
     criteria: Criteria = Field(default_factory=Criteria)
     casing_material: str = "ASTM A350 LF2"
+    material_assessment: MaterialAssessment = Field(default_factory=MaterialAssessment)
 
     def design_case(self) -> OperatingCase:
         for c in self.cases:

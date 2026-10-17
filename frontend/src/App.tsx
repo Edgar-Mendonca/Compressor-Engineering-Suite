@@ -15,7 +15,7 @@ const PAGES: Page[] = [
   { id: "lateral", label: "Lateral rotordynamics", step: 9, group: "Dynamics", render: (c) => <P.LateralPage {...c} /> },
   { id: "torsional", label: "Torsional train", step: 10, group: "Dynamics", render: (c) => <P.TorsionalPage {...c} /> },
   { id: "aux", label: "Lube oil & piping", step: 12, group: "Systems", render: (c) => <P.AuxPage {...c} /> },
-  { id: "materials", label: "Materials", group: "Systems", render: (c) => <P.MaterialsPage {...c} /> },
+  { id: "materials", label: "Material assessment", group: "Systems", render: (c) => <P.MaterialsPage {...c} /> },
   { id: "optimize", label: "Optimisation", step: 13, group: "Evaluate", render: (c) => <P.OptimizePage {...c} /> },
   { id: "verify", label: "Verification", step: 14, group: "Evaluate", render: (c) => <P.VerificationPage {...c} /> },
   { id: "reports", label: "Reports & projects", step: 15, group: "Evaluate", render: (c) => <P.ReportsPage {...c} /> },
@@ -93,7 +93,7 @@ export default function App() {
             <div className="group">{g}</div>
             {PAGES.filter((p) => p.group === g).map((p) => (
               <button key={p.id} className={p.id === page ? "active" : ""} onClick={() => setPage(p.id)}>
-                <span className="step">{p.step ?? ""}</span>{p.label}
+                <span className="step">{p.step ?? "•"}</span>{p.label}
               </button>
             ))}
           </div>

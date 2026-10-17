@@ -138,6 +138,18 @@ def build_checklist(project, res: dict) -> dict:
                            ", ".join(k for k, v in sel["checks"].items() if not v) or "all screening checks met",
                            sel["suitable"], "ISO 15156 / API 617", "materials",
                            "Record documented service limits and evidence for this material"))
+    for c in res.get("material_assessment", {}).get("components", []):
+        st = c["status"]
+        items.append(_item("Material assessment", f"{c['component']}: {c['material']}", "Within recorded, verified limits",
+                           "; ".join(c["failures"][:2]) or (f"{len(c['missing'])} evidence item(s) missing" if c["missing"] else "within limits"),
+                           st != "outside", "ISO 15156 / project material records", "materials.assessment",
+                           "; ".join(c["missing"][:3]), attention=st == "evidence"))
+    for ci, cas in enumerate(res["casings"]):
+        for f in (cas.get("impeller_fea") or {}).get("impellers", []):
+            items.append(_item("Structural", f"Impeller FEA overspeed peak - casing {ci + 1} imp {f['impeller']}", "Peak von Mises <= Sy (local)",
+                               f"{f['yield_utilisation_overspeed']:.2f} x Sy", True, "API 617 overspeed test", "structural.impeller_fea",
+                               "Local peak above yield: review with detailed 3D FEA" if f["yield_utilisation_overspeed"] > 1 else "",
+                               attention=f["yield_utilisation_overspeed"] > 1))
     lube = res.get("lube")
     if lube:
         items.append(_item("Auxiliaries", "Oil cooler temperature approach", "No temperature cross",
