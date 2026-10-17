@@ -34,7 +34,7 @@ Process → Thermodynamics → Selection & aerodynamics → Impellers → Rotor 
 
 ## Contents
 
-- [Features](#features)
+- [Feature status](#feature-status)
 - [Quick start](#quick-start)
 - [Example result](#example-result)
 - [How it works](#how-it-works)
@@ -44,24 +44,31 @@ Process → Thermodynamics → Selection & aerodynamics → Impellers → Rotor 
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 
-## Features
+## Feature status
 
-| Area | What you get |
-|---|---|
-| **Thermodynamics** | 19-component gas mixtures, Peng–Robinson EOS (built in) or CoolProp HEOS, Z, density, h, s, cp/cv, speed of sound, viscosity, dew/bubble points and phase envelope, water dew point |
-| **Compression** | Real-gas polytropic path integration, isentropic and Schultz (ASME PTC 10) methods, head, power, efficiency, efficiency back-calculated from measured discharge temperature, flow-unit conversions |
-| **Selection & aerodynamics** | Compressor-type screening, number of stages and sections, intercooling, casings, speed and impeller diameter, φ/ψ, specific speed and diameter, stage-by-stage design, stage-stacking performance maps with surge and stonewall, variable- and fixed-speed operating points, surge margin |
-| **Impellers** | Geometry estimate (exit width, eye, blades, slip and work coefficient), mass and inertia, axial thrust, rotating-disk FE for centrifugal and thermal stress, overspeed and burst margin |
-| **Rotor & shaft** | Parametric stepped shaft or your own geometry, balance piston sized from thrust, thrust collar, couplings, mass/CG/inertia, bending and torque diagrams, Peterson Kt, Marin factors, DE-Goodman fatigue, transient-torque yield, sag and stiffness |
-| **Bearings** | Plain and tilting-pad journal bearings from the Reynolds equation (pad moment equilibrium), stiffness and damping vs speed, film thickness, losses, oil flow, thrust bearing sizing |
-| **Seals** | Labyrinth and balance-piston leakage, modified-Wachel aerodynamic cross-coupling, dry-gas-seal leakage and seal-gas supply, dew-point margin along the Joule–Thomson expansion path |
-| **Lateral rotordynamics** | Timoshenko-beam FE with gyroscopics, Campbell diagram, forward/backward whirl, mode shapes, undamped critical-speed map, unbalance response, amplification factors, API 617-style separation-margin and amplitude checks, Level I stability (Qa, Q0, log decrement) |
-| **Torsional** | Driver–coupling–gearbox–compressor train, natural frequencies and modes, interference diagram, separation checks, forced response, synchronous-motor start-up transient, torsional fatigue |
-| **Systems** | Lube-oil flow, pump, cooler and reservoir sizing; pipe sizing, compressible pressure drop, IEC 60534 valve and ISO 5167 orifice sizing, system curve |
-| **Materials** | Material database with temperature derating and screening for shaft, impeller and casing (temperature range, strength, sour-service hardness) |
-| **Optimisation** | Parametric studies, normalised sensitivities, constrained optimisation (COBYLA) and configuration comparison with the full workflow in the loop |
-| **Verification** | Checklist of every module's checks against version-controlled criteria: pass, fail, attention or qualified review, with references |
-| **Documentation** | Datasheet, HTML and PDF calculation reports, Excel workbook, JSON results, STL and STEP CAD, CalculiX input decks, project revisions and calculation history |
+✅ **Available now** — implemented and covered by tests · 🚧 **Yet to build** — known gaps in the current scope ·
+💡 **Possible extensions** — ideas that fit the architecture and would add value
+
+| Area | ✅ Available now | 🚧 Yet to build | 💡 Possible extensions |
+|---|---|---|---|
+| **Thermodynamics** | 19-component mixtures; Peng–Robinson (built in) or CoolProp; Z, ρ, h, s, cp/cv, sound speed, viscosity; dew/bubble points, phase envelope, water dew point; property charts | Thermal conductivity and other transport properties; direct GERG-2008; hydrate formation | Cantera transport properties; user-defined pseudo-components (C7+); REFPROP adapter |
+| **Compression** | Real-gas polytropic path, isentropic and Schultz (ASME PTC 10); head, power, efficiency; efficiency back-calculated from test temperature; flow-unit conversions | Full ASME PTC 10 test evaluation (similarity, Mach/Re corrections) | ccp (Petrobras) adapter for test evaluation and curve conversion |
+| **Selection & aerodynamics** | Type screening; stages, sections, intercooling, casings; speed and D2; φ/ψ, Ns/Ds; stage-by-stage design; stage-stacked map with surge/stonewall; variable/fixed-speed operating points; surge margin | Mean-line stage model (generic stage curves today); Mach-number effects on curves; side-streams; inlet guide vanes | TurboFlow or h2iCompressor mean-line engine; vendor stage-curve import; CFD-ready blade export |
+| **Impellers** | Geometry estimate, slip and work coefficient, mass/inertia, axial thrust, rotating-disk FE (centrifugal + thermal), overspeed and burst margin | 3D blade and shroud stress; impeller modal (blade/disk) analysis | Parametric 3D impeller CAD with blades; Campbell/SAFE diagram for impellers |
+| **Rotor & shaft** | Parametric stepped shaft or user geometry; balance piston from thrust; collar, couplings, sleeves; mass/CG/inertia; bending/torque diagrams; Kt, Marin, DE-Goodman fatigue; transient-torque yield; sag and stiffness | Shrink-fit and keyway stresses under impellers; thermal bow | Interactive drag-and-drop shaft editor in the browser |
+| **Bearings** | Plain and tilting-pad journals (Reynolds, pad equilibrium); K and C vs speed; film thickness; losses; oil flow; thrust-bearing sizing | Thermal (THD/TEHD) temperature model; finite-length bearings; frequency-reduced pad coefficients; thrust-bearing film model | Import of vendor bearing coefficient tables; magnetic bearings |
+| **Seals** | Labyrinth and balance-piston leakage; modified-Wachel cross-coupling; dry-gas-seal leakage and supply; dew-point margin along the JT expansion path | Bulk-flow dynamic coefficients for labyrinth, hole-pattern and damper seals; seal-gas filter sizing | Full API 692 seal-gas panel sizing; oil-film seal model |
+| **Lateral rotordynamics** | Timoshenko FE with gyroscopics; Campbell; whirl direction; mode shapes and 3D animation; undamped critical-speed map; unbalance response; AF; API 617-style separation and amplitude checks; Level I stability (Qa, Q0) | Level II stability with seal/impeller coefficients; pedestal and casing flexibility | Time-domain transient response; magnetic-bearing control loop |
+| **Torsional** | Driver–coupling–gearbox–compressor train; modes; interference diagram; separation checks; forced response; synchronous-motor start-up transient; torsional fatigue | Air-gap torque from drive data; short-circuit transients; branched trains | openTorsion adapter; VFD interharmonic analysis |
+| **Structural FEA** | Rotating-disk FE; CalculiX beam and axisymmetric input decks (exported and run when `ccx` is installed) | 3D impeller and casing FEA; structural optimisation | Code_Aster adapter; automatic meshing from the STEP model |
+| **Lube oil & auxiliaries** | Oil flow from losses; pump, cooler (LMTD) and reservoir sizing; oil viscosity vs temperature | Pressure-drop network; accumulator and rundown tank; control-oil system | Full API 614 oil-console sizing with P&ID-style report |
+| **Piping & flow** | NPS sizing on velocity and ρv²; Colebrook; compressible pressure drop; IEC 60534 recycle valve; ISO 5167 orifice; system curve | Pulsation and acoustics; dynamic anti-surge simulation | Anti-surge controller tuning; full process-loop simulation |
+| **Materials** | 14-material database; temperature derating; screening for shaft, impeller and casing (temperature, strength, sour hardness) | Certified data sources; corrosion-rate models; impact-test rules | Evidence records per material and project; sour-service qualification workflow |
+| **Optimisation** | Parametric studies; normalised sensitivities; constrained COBYLA; configuration comparison; Pareto filter | Gradient-based multidisciplinary optimisation; multi-start/global search | OpenMDAO integration; design-of-experiments and surrogate models |
+| **Verification** | Checklist of every module's checks (pass, fail, attention, qualified review) with references; versioned criteria object | Edition-specific criteria files reviewed by a qualified engineer; API 618, 614 and 692 detail | Sign-off workflow with reviewer comments |
+| **Reports & data** | Datasheet; HTML and PDF reports; Excel workbook; JSON; STL and STEP; CalculiX decks; project revisions and calculation history | Word export; API datasheet form layout | Report templates per company; comparison report of several designs |
+| **Platform** | Python + FastAPI backend; React + TypeScript browser app; SQLite storage; CLI; CI on every push | User accounts and access control; background job queue for long studies | Docker image and one-click deploy; multi-project dashboards; desktop installer |
+| **Machine types** | Centrifugal compressors (API 617 scope) | Reciprocating (API 618) and screw compressors | Axial compressors; pumps and steam turbines on the same rotordynamics core |
 
 ## Quick start
 
@@ -196,14 +203,17 @@ docs/               architecture, validation, library evaluation, roadmap, logo 
 
 ## Roadmap
 
-The first eight phases of the original proposal are covered to different depths; see
-[docs/ROADMAP.md](docs/ROADMAP.md). The main next steps are:
+The 🚧 column of the [feature status](#feature-status) table is the backlog. Suggested order:
 
-1. Edition-specific acceptance criteria, reviewed by a qualified rotating-equipment engineer.
-2. A mean-line aerodynamic model (TurboFlow or h2iCompressor) and vendor stage-curve import.
-3. Bulk-flow seal coefficients and Level II stability.
-4. Thermal (THD) bearing model or vendor bearing coefficients.
-5. Reciprocating (API 618) and screw compressors.
+| Priority | Work item | Why first |
+|---|---|---|
+| 1 | Edition-specific acceptance criteria, reviewed by a qualified rotating-equipment engineer | Every pass/fail result depends on them |
+| 2 | Mean-line aerodynamic model and vendor stage-curve import | Replaces the generic stage curves behind every map and operating point |
+| 3 | Bulk-flow seal coefficients and Level II stability | Completes the API 617 rotordynamic assessment |
+| 4 | Thermal (THD) bearing model or vendor bearing coefficients | Bearing temperatures are screening estimates today |
+| 5 | Reciprocating (API 618) and screw compressors | Extends the suite beyond centrifugal machines |
+
+Section-by-section detail against the original proposal is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Contributing
 
