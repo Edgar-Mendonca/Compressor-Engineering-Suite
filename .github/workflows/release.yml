@@ -55,9 +55,9 @@ jobs:
         env:
           CENTRIFORGE_HOME: ${{ runner.temp }}/cfhome
         run: |
-          ./dist/CentriForge/CentriForge.exe --selftest
-          cat "$CENTRIFORGE_HOME/centriforge.log"
-          grep -q "selftest ok" "$CENTRIFORGE_HOME/centriforge.log"
+          ./dist/CentriForge/CentriForge.exe --selftest > selftest.txt 2>&1 || { cat selftest.txt "$CENTRIFORGE_HOME/centriforge.log" 2>/dev/null; exit 1; }
+          cat selftest.txt "$CENTRIFORGE_HOME/centriforge.log" 2>/dev/null || true
+          grep -qh "selftest ok" selftest.txt "$CENTRIFORGE_HOME/centriforge.log" 2>/dev/null
       - name: Build installer
         working-directory: packaging
         shell: pwsh
