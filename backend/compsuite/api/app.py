@@ -344,6 +344,14 @@ def compare(req: CompareRequest):
 # ---------------------------------------------------------------- frontend
 _root = Path(__file__).resolve().parents[3]
 _dist = _root / "frontend" / "dist"
+if not _dist.is_dir():
+    @app.get("/", include_in_schema=False)
+    def frontend_missing():
+        return HTMLResponse(
+            "<h2>Compressor Engineering Suite</h2><p>The API is running, but the browser app has not been built.</p>"
+            "<p>Install Node.js 18+, then run:</p><pre>cd frontend\nnpm ci\nnpm run build</pre>"
+            "<p>and restart <code>compsuite serve</code>. API docs: <a href='/docs'>/docs</a></p>")
+
 if _dist.is_dir():
     app.mount("/assets", StaticFiles(directory=_dist / "assets"), name="assets")
 
