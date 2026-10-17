@@ -2,6 +2,9 @@
 rem Compressor Engineering Suite - double-click to start.
 rem First run creates a Python environment and installs the suite.
 setlocal
+rem Avoid OpenBLAS per-thread buffer allocation failures on many-core PCs.
+set "OPENBLAS_NUM_THREADS=1"
+set "OMP_NUM_THREADS=1"
 cd /d "%~dp0backend"
 
 set "PY=python"
