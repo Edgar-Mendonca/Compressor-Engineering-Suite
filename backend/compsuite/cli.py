@@ -15,6 +15,24 @@ from pathlib import Path
 from compsuite.core.model import Project
 
 
+def _open_when_ready(url: str) -> None:
+    """Open the browser after the server answers its health check."""
+    import threading
+    import time
+    import urllib.request
+    import webbrowser
+
+    def wait():
+        for _ in range(120):
+            try:
+                urllib.request.urlopen(url + "/api/health", timeout=1)
+                webbrowser.open(url)
+                return
+            except OSError:
+                time.sleep(0.5)
+    threading.Thread(target=wait, daemon=True).start()
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="compsuite", description="Compressor engineering suite")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -26,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("serve", help="start the web application")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--open", action="store_true", help="open the browser once the server is ready")
     args = ap.parse_args(argv)
 
     if args.cmd == "example":
@@ -33,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "serve":
         import uvicorn
+        if args.open:
+            _open_when_ready(f"http://{args.host}:{args.port}")
         uvicorn.run("compsuite.api.app:app", host=args.host, port=args.port)
         return 0
 

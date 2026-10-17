@@ -72,7 +72,17 @@ Process → Thermodynamics → Selection & aerodynamics → Impellers → Rotor 
 
 ## Quick start
 
-You need **Python 3.10+**. Node.js is only needed to build or change the browser app.
+### Easiest: one double-click
+
+1. Install **Python 3.10+** from [python.org](https://www.python.org/downloads/) (on Windows tick *Add python.exe to PATH*).
+2. Download this repository (**Code → Download ZIP**) and unzip it.
+3. Double-click **`run.bat`** (Windows) or run **`./run.sh`** (macOS/Linux).
+
+The first start creates a Python environment and installs the suite (a few minutes, needs internet). After that it
+starts in seconds and opens **http://127.0.0.1:8000** in your browser. Close the window to stop the server.
+The browser app is included pre-built, so Node.js is not needed.
+
+### Manual setup (developers)
 
 ```sh
 git clone https://github.com/Edgar-Mendonca/Compressor-Engineering-Suite.git
@@ -84,10 +94,10 @@ python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -e ".[test]"
 
-# 2. Browser app (once; needs Node.js 18+)
+# 2. Browser app: pre-built in frontend/dist. Rebuild only after changing the frontend (Node.js 18+):
 cd ../frontend
 npm ci
-npm run build
+npm run build          # commit the updated frontend/dist with your change
 
 # 3. Start
 cd ../backend
