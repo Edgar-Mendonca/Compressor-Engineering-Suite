@@ -242,7 +242,7 @@ launcher shows them too. Section-by-section detail against the original proposal
 
 **Publishing a release** (maintainers): set `__version__` and `RELEASE_DATE` in `backend/compsuite/__init__.py`, the
 version in `backend/pyproject.toml`, add a CHANGELOG section, rebuild `frontend/dist`, then
-`git tag vX.Y.Z && git push origin vX.Y.Z`. The *Release* workflow builds, self-tests and publishes the installer;
+`git tag vX.Y.Z && git push origin vX.Y.Z` (or *Actions → Release → Run workflow*). The *Release* workflow builds, self-tests and publishes the installer;
 installed apps then offer the update.
 
 ## Contributing
