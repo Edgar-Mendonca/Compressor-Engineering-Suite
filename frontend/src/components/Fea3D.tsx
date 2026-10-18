@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { fmt, type Json } from "../api";
 import { safeName, saveBlob, saveFrom } from "../files";
-import { ramp } from "./ImpellerFEAView";
+import { ramp } from "./feaFields";
 import { Plot, SERIES } from "./Plot";
 
 // 3D impeller FEA Pro: on-demand cyclic-sector solve (backend structural/impeller3d.py),
@@ -131,7 +131,7 @@ export function Viewer({ r, v, setProbe, anim, h: height }: { r: Json; v: View; 
       setProbe({ node: ni, r_mm: Math.hypot(x, y), z_mm: z, values: Object.fromEntries(FIELDS.filter(([k]) => caseD[k]).map(([k, l]) => [l, caseD[k][ni]])) });
     };
     renderer.domElement.addEventListener("click", onClick);
-    let raf = 0, t0 = performance.now();
+    let raf = 0, t0 = performance.now(), lastSig = "";
     const loop = () => {
       const now = performance.now(), t = (now - t0) / 1000;
       const L = live.current, an = L.anim, vv: View = L.v;
@@ -147,9 +147,13 @@ export function Viewer({ r, v, setProbe, anim, h: height }: { r: Json; v: View; 
         extra = an.residual ? 1 : 0;
       }
       const mode = shape ? Math.sin(t * 4) * R * 0.04 : 0;
-      for (let k = 0; k < pos.length; k++) pos[k] = base[k] + disp[k] * sc + modeVec[k] * mode + (extra ? (an.resVec?.[k] ?? 0) : 0);
-      (g.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
-      g.computeVertexNormals();
+      const sig = `${sc}|${mode.toFixed(6)}|${extra}|${an?.resVec ? 1 : 0}`;
+      if (sig !== lastSig) {            // geometry only when the deformation changes, not every frame
+        lastSig = sig;
+        for (let k = 0; k < pos.length; k++) pos[k] = base[k] + disp[k] * sc + modeVec[k] * mode + (extra ? (an.resVec?.[k] ?? 0) : 0);
+        (g.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
+        g.computeVertexNormals();
+      }
       clip[0].constant = vv.cut >= 100 ? 10 : (vv.cut / 100) * R * 1.2;
       mMax.visible = mMin.visible = !shape && !an;
       holder.rotation.y += speedRot;

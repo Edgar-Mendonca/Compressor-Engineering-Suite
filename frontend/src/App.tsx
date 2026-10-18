@@ -1,21 +1,24 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Json } from "./api";
 import { Launcher } from "./Launcher";
 import { GROUPS, MODULES, num } from "./modules";
 import { NewProject } from "./NewProject";
 import { bridge, onToast, openProject, recent, saveProject, type Toast } from "./files";
-import { ImpellerFEAPage } from "./pages/ImpellerFEA";
-import { MechRunTestPage } from "./pages/MechRunTest";
-import { ShopTestsPage } from "./pages/ShopTests";
 import { STEPS, TutorialCard } from "./Tutorial";
 import * as P from "./pages/Pages";
+
+// Heavy pages load on first use so the app starts quickly.
+const ImpellerFEAPage = lazy(() => import("./pages/ImpellerFEA").then((m) => ({ default: m.ImpellerFEAPage })));
+const MechRunTestPage = lazy(() => import("./pages/MechRunTest").then((m) => ({ default: m.MechRunTestPage })));
+const ShopTestsPage = lazy(() => import("./pages/ShopTests").then((m) => ({ default: m.ShopTestsPage })));
+const PerfTestPage = lazy(() => import("./pages/PerfTest").then((m) => ({ default: m.PerfTestPage })));
 
 const RENDER: Record<string, (c: P.Ctx) => JSX.Element> = {
   project: (c) => <P.ProjectPage {...c} />, gas: (c) => <P.GasCasesPage {...c} />, thermo: (c) => <P.ThermoPage {...c} />,
   compressor: (c) => <P.CompressorPage {...c} />, impellers: (c) => <P.ImpellerPage {...c} />, impfea: (c) => <ImpellerFEAPage {...c} />, rotor: (c) => <P.RotorPage {...c} />,
   bearings: (c) => <P.BearingsSealsPage {...c} />, lateral: (c) => <P.LateralPage {...c} />, torsional: (c) => <P.TorsionalPage {...c} />,
   materials: (c) => <P.MaterialsPage {...c} />, aux: (c) => <P.AuxPage {...c} />, optimize: (c) => <P.OptimizePage {...c} />,
-  shoptest: (c) => <ShopTestsPage {...c} />, mrt: (c) => <MechRunTestPage {...c} />, verify: (c) => <P.VerificationPage {...c} />, reports: (c) => <P.ReportsPage {...c} />,
+  shoptest: (c) => <ShopTestsPage {...c} />, mrt: (c) => <MechRunTestPage {...c} />, perftest: (c) => <PerfTestPage {...c} />, verify: (c) => <P.VerificationPage {...c} />, reports: (c) => <P.ReportsPage {...c} />,
 };
 
 const DRAFT_KEY = "compsuite.draft.v1";
@@ -49,25 +52,37 @@ export default function App() {
     store.set("centriforge.theme", theme);
   }, [theme]);
 
+  const draftT = useRef(0);
   const setProject = useCallback((p: Json) => {
     setProjectState(p);
-    store.set(DRAFT_KEY, JSON.stringify(p));
+    window.clearTimeout(draftT.current);   // the draft is written once typing pauses, not on every keystroke
+    draftT.current = window.setTimeout(() => store.set(DRAFT_KEY, JSON.stringify(p)), 800);
   }, []);
 
+  const abort = useRef<AbortController | null>(null);
+  const [started, setStarted] = useState(0);
+  const [, setTick] = useState(0);
+  useEffect(() => { if (!running) return; const t = setInterval(() => setTick((k) => k + 1), 500); return () => clearInterval(t); }, [running]);
   const run = useCallback(async (p: Json) => {
+    abort.current?.abort();
+    const ac = new AbortController();
+    abort.current = ac;
     setRunning(true);
+    setStarted(Date.now());
     setError("");
     try {
-      const r = await api.run(p, "full");
+      const r = await api.run(p, "full", ac.signal);
       setResults(r);
       setRanWith(JSON.stringify(p));
       setCasing(0);
     } catch (e) {
-      setError((e as Error).message);
+      if (!ac.signal.aborted) setError((e as Error).message);
     } finally {
-      setRunning(false);
+      if (abort.current === ac) setRunning(false);
     }
   }, []);
+  const cancel = () => { abort.current?.abort(); setRunning(false); };
+  const elapsed = running ? Math.round((Date.now() - started) / 1000) : 0;
 
   // Start-up loads only the schema: no project and no analysis until the user picks one on the start page.
   useEffect(() => {
@@ -149,7 +164,8 @@ export default function App() {
         </nav>
         <span className="mono caps muted hide-sm">Compressor engineering suite</span>
         <span className="spacer" />
-        {running && <span className="pill attention">Running analysis…</span>}
+        {running && <span className="pill attention run-pill"><i style={{ width: `${Math.min(95, elapsed * 3.5)}%` }} />Running analysis · {elapsed} s
+          <button className="chip" onClick={cancel}>Cancel</button></span>}
         <button className="tab-btn" onClick={() => setTheme(THEMES[(THEMES.indexOf(theme as never) + 1) % 3])} title="Theme">
           Theme · {theme}</button>
       </header>
@@ -196,7 +212,8 @@ export default function App() {
             </header>
             <div className="content">
               {error && <div className="error">{error}</div>}
-              {project && schema && current ? RENDER[current.id](ctx) : !error && <p className="muted">Loading…</p>}
+              <Suspense fallback={<p className="muted">Loading module…</p>}>
+                {project && schema && current ? RENDER[current.id](ctx) : !error && <p className="muted">Loading…</p>}</Suspense>
             </div>
           </main>
         </div>

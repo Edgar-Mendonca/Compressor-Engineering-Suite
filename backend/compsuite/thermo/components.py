@@ -46,6 +46,7 @@ COMPONENTS: dict[str, Component] = {c.key: c for c in [
     _c("CO", "Carbon monoxide", 28.010, 132.92, 34.99, 0.048, (30.87, -1.285e-2, 2.789e-5, -1.272e-8)),
     _c("Ar", "Argon", 39.948, 150.86, 48.98, -0.002, (20.786, 0.0, 0.0, 0.0)),
     _c("He", "Helium", 4.003, 5.20, 2.28, -0.390, (20.786, 0.0, 0.0, 0.0)),
+    _c("R134a", "R134a (1,1,1,2-tetrafluoroethane, test gas)", 102.03, 374.21, 40.59, 0.327, (19.8, 0.2765, -1.75e-4, 0.0)),
 ]}
 
 # Names used by CoolProp for the optional reference backend.
@@ -54,7 +55,7 @@ COOLPROP_NAMES = {
     "nC4H10": "n-Butane", "iC5H12": "Isopentane", "nC5H12": "n-Pentane", "nC6H14": "n-Hexane",
     "nC7H16": "n-Heptane", "nC8H18": "n-Octane", "N2": "Nitrogen", "O2": "Oxygen",
     "CO2": "CarbonDioxide", "H2S": "HydrogenSulfide", "H2": "Hydrogen", "H2O": "Water",
-    "CO": "CarbonMonoxide", "Ar": "Argon", "He": "Helium",
+    "CO": "CarbonMonoxide", "Ar": "Argon", "He": "Helium", "R134a": "R134a",
 }
 
 # Default binary interaction parameters for Peng-Robinson (symmetric).

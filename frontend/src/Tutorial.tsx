@@ -15,6 +15,7 @@ export const STEPS: { page: string; title: string; text: string; run?: boolean }
   { page: "lateral", title: "Lateral & stability", text: "Campbell diagram, critical speeds, unbalance response and stability against API 617-style criteria." },
   { page: "torsional", title: "Torsional train", text: "Natural frequencies of the whole train, interference with excitations and the motor start-up torque." },
   { page: "mrt", title: "Mechanical running test", text: "The API 617 shop running test planned from your design: play the animated test to see the speed-time plan, predicted probe readings and critical-speed pass, then enter the log sheet for pass / fail." },
+  { page: "perftest", title: "Performance test (PTC 10)", text: "Choose Type 1 (specified gas) or Type 2 (substitute gas). The export gas example loads a CO2 Type 2 test: check the similarity table, click any other gas / pressure combination, run the animated loop to surge, then review the converted curves and the API 617 acceptance." },
   { page: "verify", title: "Verification", text: "The full traceable checklist. Work through every fail and attention item, then save a revision and export the report in Reports & projects." },
 ];
 

@@ -123,19 +123,61 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _serve(port: int):
+def _server_main(port: int) -> None:
+    """Child process: the engineering server. Heavy analyses here never block the window's UI thread."""
+    if FROZEN and sys.stdout is None:
+        sys.stdout = sys.stderr = open(data_dir() / "server.log", "a", buffering=1, encoding="utf-8")
+    import uvicorn
+    from compsuite.api.app import app
+    uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", log_config=None)).run()
+
+
+def _wait(url: str, proc=None) -> None:
+    for _ in range(240):
+        if proc is not None and not proc.is_alive():
+            raise RuntimeError(f"The engineering server stopped during start-up (exit code {proc.exitcode}); see server.log")
+        try:
+            urllib.request.urlopen(url + "/api/health", timeout=1)
+            return
+        except OSError:
+            time.sleep(0.25)
+    raise RuntimeError("The engineering server did not start")
+
+
+def _serve(port: int, process: bool = False):
+    """Start the server on ``port``: in a separate process for the desktop window, else in a thread."""
+    url = f"http://127.0.0.1:{port}"
+    if process:
+        import multiprocessing as mp
+        proc = mp.get_context("spawn").Process(target=_server_main, args=(port,), daemon=True, name="centriforge-server")
+        proc.start()
+        _wait(url, proc)
+        return proc, url
     import uvicorn
     from compsuite.api.app import app
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", log_config=None))
     threading.Thread(target=server.run, daemon=True).start()
-    url = f"http://127.0.0.1:{port}"
-    for _ in range(240):
+    _wait(url)
+    return server, url
+
+
+def _watchdog(state: dict, window) -> None:
+    """Restart a crashed server and reload the page; close the app when the server exits cleanly (update install)."""
+    while True:
+        time.sleep(1.0)
+        proc = state.get("server")
+        if proc is None or proc.is_alive():
+            continue
+        if proc.exitcode == 0:
+            window.destroy()
+            return
+        print(f"Engineering server exited with code {proc.exitcode}; restarting.")
         try:
-            urllib.request.urlopen(url + "/api/health", timeout=1)
-            return server, url
-        except OSError:
-            time.sleep(0.25)
-    raise RuntimeError("The engineering server did not start")
+            state["server"], url = _serve(_free_port(), process=True)
+            window.load_url(url)
+        except Exception as exc:  # noqa: BLE001
+            window.load_html(f"<body style='font-family:Segoe UI;padding:40px'><h2>{APP_NAME} engine stopped</h2><pre>{exc}</pre></body>")
+            return
 
 
 def selftest() -> int:
@@ -156,6 +198,8 @@ def selftest() -> int:
 
 
 def main() -> int:
+    import multiprocessing
+    multiprocessing.freeze_support()  # frozen build: the server child re-enters here
     if FROZEN and sys.stdout is None:  # windowed build: keep a log instead of a console
         sys.stdout = sys.stderr = open(data_dir() / "centriforge.log", "w", buffering=1, encoding="utf-8")
     if "--selftest" in sys.argv:
@@ -172,8 +216,9 @@ def main() -> int:
 
     def boot(window):  # runs after the splash window is on screen
         try:
-            state["server"], url = _serve(_free_port())
+            state["server"], url = _serve(_free_port(), process=True)
             window.load_url(url)
+            threading.Thread(target=_watchdog, args=(state, window), daemon=True).start()
         except Exception as exc:  # show the reason instead of a frozen splash
             window.load_html(f"<body style='font-family:Segoe UI;padding:40px'><h2>{APP_NAME} could not start</h2><pre>{exc}</pre></body>")
 
@@ -189,10 +234,9 @@ def main() -> int:
         webbrowser.open(url)
         while True:
             time.sleep(3600)
-    server = state.get("server")
-    if server is None:
-        return 0
-    server.should_exit = True
+    proc = state.get("server")
+    if proc is not None and proc.is_alive():
+        proc.terminate()
     return 0
 
 

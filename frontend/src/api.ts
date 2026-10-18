@@ -2,9 +2,9 @@
 
 export type Json = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
-async function req(method: string, url: string, body?: unknown): Promise<Json> {
+async function req(method: string, url: string, body?: unknown, signal?: AbortSignal): Promise<Json> {
   const res = await fetch(url, {
-    method,
+    method, signal,
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -26,14 +26,14 @@ export const api = {
   appInfo: () => req("GET", "/api/app/info"),
   examples: () => req("GET", "/api/examples"),
   example: (key: string) => req("GET", `/api/examples/${key}`),
-  updateCheck: () => req("GET", "/api/app/update"),
+  updateCheck: (force = false) => req("GET", `/api/app/update${force ? "?force=true" : ""}`),
   updateApply: () => req("POST", "/api/app/update"),
   updateStatus: () => req("GET", "/api/app/update/status"),
   defaults: () => req("GET", "/api/defaults"),
   schema: () => req("GET", "/api/schema"),
   components: () => req("GET", "/api/components"),
   materials: () => req("GET", "/api/materials"),
-  run: (project: Json, level: "full" | "fast" = "full") => req("POST", "/api/run", { project, level }),
+  run: (project: Json, level: "full" | "fast" = "full", signal?: AbortSignal) => req("POST", "/api/run", { project, level }, signal),
   thermoChart: (body: Json) => req("POST", "/api/thermo/chart", body),
   envelope: (body: Json) => req("POST", "/api/thermo/envelope", body),
   projects: () => req("GET", "/api/projects"),

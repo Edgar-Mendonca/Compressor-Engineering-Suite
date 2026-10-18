@@ -599,6 +599,49 @@ def mrt_pdf(req: MRTRequest):
                     headers={"Content-Disposition": f'attachment; filename="{req.project.name.replace(" ", "_")}_MRT.pdf"'})
 
 
+class PTCRequest(BaseModel):
+    project: Project
+    options: dict[str, Any] = Field(default_factory=dict)            # test_type, method, selection, speed_adjust_pct, limits ...
+    logs: dict[str, Any] = Field(default_factory=dict)               # {section: {"0.900": [readings]}}; empty = simulated example
+
+
+_ptc_cache: "OrderedDict[str, dict]" = OrderedDict()
+
+
+def _ptc(req: PTCRequest) -> tuple[dict, dict]:
+    import hashlib
+    import json
+    from compsuite.testing.ptc10 import ptc10_analysis
+    res = _cache.get(f"{input_hash(req.project)}:full") or _run_cached(req.project, "fast")
+    key = hashlib.sha1(json.dumps([input_hash(req.project), req.options, req.logs], sort_keys=True, default=str).encode()).hexdigest()
+    if key not in _ptc_cache:
+        try:
+            _ptc_cache[key] = ptc10_analysis(req.project, res, req.options, req.logs)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, f"Performance test calculation failed: {exc}") from exc
+        while len(_ptc_cache) > 6:
+            _ptc_cache.popitem(last=False)
+    return _ptc_cache[key], res
+
+
+@app.post("/api/ptc10")
+def ptc10(req: PTCRequest):
+    return jsonable(_ptc(req)[0])
+
+
+@app.post("/api/ptc10/report.pdf")
+def ptc10_pdf(req: PTCRequest):
+    from compsuite.reporting import prism
+    from compsuite.testing.mrt import test_train
+    from compsuite.testing.ptc10 import ptc10_report
+    out, res = _ptc(req)
+    comps = test_train(req.project, res, res["casings"][0]["lateral"]["speeds"], {})["components"]
+    with prism._LOCK:
+        pdf = ptc10_report(req.project, out, comps)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{req.project.name.replace(" ", "_")}_PTC10.pdf"'})
+
+
 # ---------------------------------------------------------------- charts
 class PlotRequest(BaseModel):
     spec: dict[str, Any]

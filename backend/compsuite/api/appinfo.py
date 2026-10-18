@@ -64,7 +64,10 @@ def _get_json(url: str) -> dict:
 
 
 @router.get("/update")
-def check_update():
+def check_update(force: bool = False):
+    c = _last_check.get("resp")
+    if c and not force and time.time() - c["checked"] < 600:   # the launcher re-opens often; GitHub once per 10 min
+        return c
     try:
         rel = _get_json(f"https://api.github.com/repos/{REPO}/releases/latest")
     except urllib.error.HTTPError as exc:
@@ -77,11 +80,12 @@ def check_update():
     latest = rel.get("tag_name", "").lstrip("v")
     asset = next((a for a in rel.get("assets", []) if a["name"].lower().endswith(".exe")), None)
     _last_check.update(rel=rel, asset=asset)
-    return {"available": bool(latest) and _vtuple(latest) > _vtuple(__version__), "current": __version__,
+    _last_check["resp"] = {"available": bool(latest) and _vtuple(latest) > _vtuple(__version__), "current": __version__,
             "latest": latest, "published": rel.get("published_at"), "notes": rel.get("body", ""),
             "url": rel.get("html_url"), "installer": asset["browser_download_url"] if asset else None,
             "size_mb": round(asset["size"] / 1e6, 1) if asset else None,
             "can_install": FROZEN and sys.platform == "win32" and asset is not None, "checked": time.time()}
+    return _last_check["resp"]
 
 
 def _download_and_install(url: str) -> None:
@@ -112,7 +116,7 @@ def apply_update():
         raise HTTPException(400, "One-click install works in the installed Windows app. From source, download the new release.")
     if _state["phase"] in ("downloading", "installing"):
         return _state
-    asset = _last_check.get("asset") or (check_update() and _last_check.get("asset"))
+    asset = _last_check.get("asset") or (check_update(True) and _last_check.get("asset"))
     if not asset:
         raise HTTPException(404, "No installer found in the latest release.")
     threading.Thread(target=_download_and_install, args=(asset["browser_download_url"],), daemon=True).start()

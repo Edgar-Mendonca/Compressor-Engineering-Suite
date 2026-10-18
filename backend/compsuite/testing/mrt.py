@@ -423,127 +423,181 @@ def mrt_analysis(project, res: dict, casing: int = 0, log: list[dict] | None = N
 
 
 # ---------------------------------------------------------------- PDF report
+TAG = {"V1-X": "1R1X", "V1-Y": "1R1Y", "V2-X": "1R2X", "V2-Y": "1R2Y"}
+PCOL = {"V1-X": "#0b5cad", "V1-Y": "#7b3fb5", "V2-X": "#2e9e6b", "V2-Y": "#d1782a"}
+
+
+def style(ax, xl="", yl="", title=None):
+    ax.grid(True, color="#e3e7ea", lw=0.6)
+    for k in ("top", "right"):
+        ax.spines[k].set_visible(False)
+    for k in ("left", "bottom"):
+        ax.spines[k].set_color("#9aa3ab")
+    ax.tick_params(labelsize=6.5, colors="#3b4652")
+    ax.set_xlabel(xl, fontsize=7, color="#3b4652")
+    ax.set_ylabel(yl, fontsize=7, color="#3b4652")
+    if title:
+        ax.set_title(title, fontsize=8, loc="left", color="#0c1a2b", weight="bold")
+
+
 def mrt_report(project, out: dict) -> bytes:
-    """A4 PDF: procedure, train, speed-time plan, predicted response, acceptance, URT, logs, leak test, inspection."""
+    """A4 PDF in the shop MRT-chart layout: setup (2.5D drawing), procedure, plan, trend, Bode, polar,
+    spectra per speed, waterfall, spectrogram, acceptance, URT, logs, leak test and inspection."""
     import io
-    import textwrap
 
     from matplotlib.backends.backend_pdf import PdfPages
-    from matplotlib.figure import Figure
-    from matplotlib.patches import Circle, Rectangle
-    from PIL import Image
 
-    from compsuite.reporting.prism import render
-
-    def img(fig, rect, spec, h=3.0):
-        png = render(spec, {"width_in": 6.6, "height_in": h, "font_size": 9}, "png", dpi=160)["content"]
-        ax = fig.add_axes(rect)
-        ax.imshow(Image.open(io.BytesIO(png)))
-        ax.axis("off")
-
-    class Doc:
-        def __init__(self, pdf):
-            self.pdf, self.fig, self.y = pdf, None, 0
-
-        def page(self, title):
-            if self.fig is not None:
-                self.pdf.savefig(self.fig)
-            self.fig = Figure(figsize=(8.27, 11.69))
-            self.fig.text(0.07, 0.955, title, fontsize=13, weight="bold")
-            self.fig.text(0.07, 0.94, f"{project.name} - mechanical running test (API 617 9th ed. 8.3.2 / 8.3.3)", fontsize=8, color="#5b6878")
-            self.y = 0.91
-
-        def line(self, s, size=8.5, color="#0c1a2b", bold=False, x=0.07, step=0.019):
-            for part in textwrap.wrap(s, int(118 * 8.5 / size)) or [""]:
-                if self.y < 0.06:
-                    self.page("(continued)")
-                self.fig.text(x, self.y, part, fontsize=size, color=color, weight="bold" if bold else "normal")
-                self.y -= step
-
-        def table(self, head, rows, xs):
-            for j, h in enumerate(head):
-                self.fig.text(xs[j], self.y, h, fontsize=7.5, weight="bold", color="#5b6878")
-            self.y -= 0.017
-            for r in rows:
-                if self.y < 0.06:
-                    self.page("(continued)")
-                for j, v in enumerate(r):
-                    col = {"pass": "#1f7a4d", "fail": "#c0392b", "attention": "#a8650c"}.get(str(v), "#0c1a2b")
-                    self.fig.text(xs[j], self.y, str(v)[:70], fontsize=7.5, color=col)
-                self.y -= 0.016
-            self.y -= 0.01
+    from compsuite.testing.drawings import Doc, train
 
     f = lambda v, n=1: "-" if v is None else (f"{v:.{n}f}" if isinstance(v, (int, float)) else str(v))  # noqa: E731
-    sp, pred, plan, u = out["speeds"], out["prediction"], out["plan"], out["urt"]
+    sp, pred, plan, u, al = out["speeds"], out["prediction"], out["plan"], out["urt"], out["along"]
+    lim, s = out["limit_um"], pred["speeds_rpm"]
+    tr = out["train"]
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
-        d = Doc(pdf)
-        d.page("Mechanical running test - procedure and test train")
-        d.line(f"MSS {sp['min_rpm']:.0f} rpm | rated {sp['rated_rpm']:.0f} rpm | MCS {sp['mcs_rpm']:.0f} rpm | trip {sp['trip_rpm']:.0f} rpm | "
-               f"vibration limit {out['limit_um']:.1f} um pk-pk | overall status {out['status'].upper()}", bold=True)
-        d.y -= 0.005
-        for i, s in enumerate(out["procedure"]):
-            d.line(f"{i + 1}. {s}", 8)
-        # Train diagram.
-        ax = d.fig.add_axes([0.06, d.y - 0.2, 0.88, 0.18])
-        ax.set_xlim(0, 100), ax.set_ylim(0, 30), ax.axis("off")
-        ax.add_patch(Rectangle((1, 2), 98, 3, color="#b9bfc2"))
-        x = 2
-        colors = {"vfd": "#6D4FC2", "motor": "#0B5CAD", "turbine": "#0B5CAD", "coupling": "#E69F00", "gearbox": "#0E8A91", "casing": "#2E9E6B"}
-        main = [c for c in out["train"]["components"] if c["kind"] in colors]
-        wd = {"vfd": 9, "motor": 16, "turbine": 16, "coupling": 5, "gearbox": 12, "casing": 20}
-        sc = 94 / sum(wd[c["kind"]] + 2 for c in main)
-        for c in main:
-            w = wd[c["kind"]] * sc
-            h = 22 if c["kind"] != "coupling" else 6
-            y0 = 5 if c["kind"] != "coupling" else 12
-            ax.add_patch(Rectangle((x, y0), w, h, facecolor=colors[c["kind"]], alpha=0.85, edgecolor="#0c1a2b"))
-            if c["kind"] == "gearbox":
-                ax.add_patch(Circle((x + w * 0.35, 13), 5, fill=False, ec="white")), ax.add_patch(Circle((x + w * 0.75, 19), 2, fill=False, ec="white"))
-            ax.text(x + w / 2, 28.5, c["name"][:22], ha="center", fontsize=6)
-            ax.text(x + w / 2, 0, c["source"], ha="center", fontsize=6, color="#5b6878")
-            x += w + 2 * sc
-        ax.plot([2, 98], [15, 15], color="#3b4652", lw=1.2, zorder=0)
-        d.y -= 0.23
+        d = Doc(pdf, f"{project.name} - mechanical running test (API 617 9th ed. 8.3.2 / 8.3.3)")
+        d.page("MRT test set-up")
+        train(d.drawing([0.05, 0.62, 0.9, 0.29]), tr["components"])
+        d.y = 0.6
+        kw = next((c["name"] for c in tr["components"] if c["kind"] in ("motor", "turbine")), "-")
+        d.table(["Set-up", "Value", "", ""], [
+            ("Test driver", kw, "Gear ratio", f"{tr['gear_ratio']:.3f}" if tr["geared"] else "direct drive"),
+            ("Rotation", "clockwise from drive end", "Seal gas", "N2 (shop)"),
+            ("Oil", f"{project.bearings.oil_grade}, {out['oil']['t']['nor']:.0f} C", "Oil filtration", "10 um"),
+            ("Probes", "1R1X/Y drive end, 1R2X/Y non-drive end", "Limit", f"{lim:.1f} um pk-pk"),
+            ("MSS / rated", f"{sp['min_rpm']:.0f} / {sp['rated_rpm']:.0f} rpm", "MCS / trip", f"{sp['mcs_rpm']:.0f} / {sp['trip_rpm']:.0f} rpm")],
+            [0.07, 0.22, 0.52, 0.66])
         d.line("Equipment (shop / contract)", 10, bold=True)
-        d.table(["Item", "Source", "Note"], [(c["name"], c["source"], c["note"]) for c in out["train"]["components"]], [0.07, 0.42, 0.52])
+        d.table(["Item", "Source", "Note"], [(c["name"], c["source"], c["note"]) for c in tr["components"]], [0.07, 0.42, 0.52])
+        d.line(f"Overall status {out['status'].upper()}", 9, bold=True)
 
-        d.page("Speed-time plan")
-        img(d.fig, [0.05, 0.655, 0.9, 0.27], {"data": [{"x": [t / 60 for t in plan["t_min"]], "y": plan["speed_rpm"], "name": "Speed", "mode": "lines"},
-                                                    *[{"x": [0, plan["duration_min"] / 60], "y": [c, c], "name": f"Critical {c:.0f} rpm", "mode": "lines",
-                                                       "line": {"dash": "dash"}} for c in [q["speed_rpm"] for q in pred["critical_speeds"]][:2]]],
-                                           "layout": {"xaxis": {"title": "Time (h)"}, "yaxis": {"title": "Speed (rpm)"}}})
-        img(d.fig, [0.05, 0.42, 0.9, 0.23], {"data": [{"x": [t / 60 for t in plan["t_min"]], "y": plan["oil_t_c"], "name": "Oil supply T (C)", "mode": "lines"},
-                                                    {"x": [t / 60 for t in plan["t_min"]], "y": plan["oil_p_barg"], "name": "Oil supply P (barg)", "mode": "lines", "yaxis": "y2"}],
-                                           "layout": {"xaxis": {"title": "Time (h)"}, "yaxis": {"title": "Oil T (C)"}, "yaxis2": {"title": "Oil P (barg)"}}}, 2.6)
-        d.y = 0.41
-        d.table(["Phase", "From - to (min)", "Speed rpm", "Oil T / P"],
-                [(s["label"][:52], f"{s['t0_min']:.0f}-{s['t1_min']:.0f}", f"{s['n0_rpm']:.0f}->{s['n1_rpm']:.0f}", f"{s['oil_t']} / {s['oil_p']}")
-                 for s in plan["segments"] if s["t1_min"] - s["t0_min"] >= 5 or s["phase"] in ("critical", "coastdown")], [0.07, 0.52, 0.66, 0.8])
+        d.page("Procedure and speed-time plan")
+        for i, t in enumerate(out["procedure"]):
+            d.line(f"{i + 1}. {t}", 8)
+        ax = d.fig.add_axes([0.1, 0.36, 0.83, 0.25])
+        th = [t / 60 for t in plan["t_min"]]
+        ax.fill_between(th, plan["speed_rpm"], color="#0b5cad", alpha=0.08)
+        ax.plot(th, plan["speed_rpm"], color="#0b5cad", lw=1.4)
+        for c in pred["critical_speeds"][:2]:
+            ax.axhline(c["speed_rpm"], color="#c0392b", lw=0.8, ls="--")
+            ax.text(th[-1], c["speed_rpm"], f" Nc {c['speed_rpm']:.0f}", fontsize=6, color="#c0392b", va="bottom", ha="right")
+        for k, n in (("MCS", sp["mcs_rpm"]), ("Trip", sp["trip_rpm"])):
+            ax.axhline(n, color="#5b6878", lw=0.6, ls=":")
+            ax.text(0, n, f"{k} ", fontsize=6, color="#5b6878", ha="right", va="center")
+        style(ax, "Time (h)", "Speed (rpm)", "Speed-time plan")
+        ax2 = d.fig.add_axes([0.1, 0.12, 0.83, 0.17])
+        ax2.plot(th, plan["oil_t_c"], color="#d1782a", lw=1.2, label="Oil supply T (C)")
+        ax3 = ax2.twinx()
+        ax3.plot(th, plan["oil_p_barg"], color="#2e9e6b", lw=1.2, label="Oil supply P (barg)")
+        style(ax2, "Time (h)", "Oil T (C)", "Lube-oil sequences (4 h run)")
+        ax3.tick_params(labelsize=6.5)
+        ax3.set_ylabel("Oil P (barg)", fontsize=7)
 
-        d.page("Predicted response (allowable residual unbalance)")
-        cm = 1.05 * max(v["clearance_um"] for v in pred["centreline"].values())
-        s = pred["speeds_rpm"]
-        img(d.fig, [0.05, 0.62, 0.9, 0.3], {"data": [{"x": s, "y": pred["probes"][k]["unfiltered_um"], "name": k, "mode": "lines"} for k in PROBES] +
-                                           [{"x": [s[0], s[-1]], "y": [out["limit_um"]] * 2, "name": "API limit", "mode": "lines", "line": {"dash": "dash", "color": "#C0392B"}}],
-                                           "layout": {"title": "Bode - amplitude (unfiltered)", "xaxis": {"title": "Speed (rpm)"}, "yaxis": {"title": "um pk-pk"}}})
-        img(d.fig, [0.05, 0.34, 0.9, 0.27], {"data": [{"x": s, "y": pred["probes"][k]["phase_deg"], "name": k, "mode": "lines"} for k in PROBES],
-                                            "layout": {"title": "Bode - 1X phase", "xaxis": {"title": "Speed (rpm)"}, "yaxis": {"title": "Phase (deg)"}}}, 2.7)
-        img(d.fig, [0.05, 0.05, 0.43, 0.28], {"data": [{"x": v["x_um"], "y": v["y_um"], "name": k, "mode": "lines+markers"} for k, v in pred["centreline"].items()],
-                                             "layout": {"title": "Shaft centreline", "xaxis": {"title": "x (um)", "range": [-cm, cm]},
-                                                        "yaxis": {"title": "y (um)", "range": [-cm, cm]}}}, 3.6)
-        img(d.fig, [0.5, 0.05, 0.45, 0.28], {"data": [{"x": [a * math.cos(math.radians(p)) for a, p in zip(pred["probes"][k]["amp_1x_um"], pred["probes"][k]["phase_deg"])],
-                                                      "y": [a * math.sin(math.radians(p)) for a, p in zip(pred["probes"][k]["amp_1x_um"], pred["probes"][k]["phase_deg"])],
-                                                      "name": k, "mode": "lines"} for k in ("V1-X", "V2-X")],
-                                             "layout": {"title": "Polar (1X)", "xaxis": {"title": "um"}, "yaxis": {"title": "um"}}}, 3.6)
+        d.page("Trend chart (amplitude and speed)")
+        ax = d.fig.add_axes([0.1, 0.55, 0.8, 0.34])
+        ta = [t / 60 for t in al["t_min"]]
+        for k in PROBES:
+            ax.plot(ta, al[k], color=PCOL[k], lw=1.0, label=TAG[k])
+        ax.axhline(lim, color="#c0392b", lw=0.8, ls="--", label="API limit")
+        style(ax, "Time (h)", "Amplitude (um pk-pk)", "Shaft vibration and speed")
+        ax.legend(fontsize=6, ncol=5, frameon=False, loc="upper left")
+        axs = ax.twinx()
+        axs.plot(ta, al["speed_rpm"], color="#8e9aa5", lw=0.9, ls="-", alpha=0.8)
+        axs.set_ylabel("Speed (rpm)", fontsize=7)
+        axs.tick_params(labelsize=6.5)
+        d.y = 0.5
+        d.table(["Channel", "Abbreviation", "Max um", "Min um", "At MCS um"],
+                [({"V1-X": "X vibration compressor drive end", "V1-Y": "Y vibration compressor drive end", "V2-X": "X vibration compressor non-drive end",
+                   "V2-Y": "Y vibration compressor non-drive end"}[k], TAG[k], f(max(al[k]), 2), f(min(al[k]), 2),
+                  f(_interp_ext(sp["mcs_rpm"], s, pred["probes"][k]["unfiltered_um"]), 2)) for k in PROBES], [0.07, 0.42, 0.56, 0.68, 0.8])
+        bt = [k for k in al if k.startswith("Bearing")]
+        if bt:
+            ax = d.fig.add_axes([0.1, 0.1, 0.8, 0.22])
+            for i, k in enumerate(bt):
+                ax.plot(ta, al[k], lw=1.1, label=k, color=["#0b5cad", "#2e9e6b", "#d1782a", "#7b3fb5"][i % 4])
+            ax.axhline(out["bearing_temp_limit_c"], color="#c0392b", lw=0.8, ls="--")
+            style(ax, "Time (h)", "Metal temperature (C)", "Bearing metal temperature")
+            ax.legend(fontsize=6, frameon=False, ncol=4)
+
+        for pair in (("V1-X", "V1-Y"), ("V2-X", "V2-Y")):
+            d.page(f"Bode plots - {TAG[pair[0]]} / {TAG[pair[1]]} (coast-down, 1X)")
+            for j, k in enumerate(pair):
+                y0 = 0.53 - j * 0.45
+                a1 = d.fig.add_axes([0.1, y0 + 0.17, 0.83, 0.2])
+                a1.plot(s, pred["probes"][k]["amp_1x_um"], color=PCOL[k], lw=1.3)
+                a1.fill_between(s, pred["probes"][k]["amp_1x_um"], color=PCOL[k], alpha=0.08)
+                for c in pred["critical_speeds"][:2]:
+                    a1.axvline(c["speed_rpm"], color="#c0392b", lw=0.6, ls=":")
+                style(a1, "", "Amplitude (um pk-pk)", f"{TAG[k]}: {'X' if k.endswith('X') else 'Y'}-direction vibration of compressor {'drive' if k.startswith('V1') else 'non-drive'} end")
+                a2 = d.fig.add_axes([0.1, y0, 0.83, 0.15])
+                ph = np.degrees(np.unwrap(np.radians(pred["probes"][k]["phase_deg"])))
+                a2.plot(s, ph - 360 * math.floor(min(ph) / 360), color=PCOL[k], lw=1.1)
+                style(a2, "Speed (rpm)", "Phase (deg)")
+
+        for title, rev in (("Speed-up polar plots (1X)", False), ("Coast-down polar plots (1X)", True)):
+            d.page(title)
+            for j, k in enumerate(PROBES):
+                ax = d.fig.add_axes([0.08 + (j % 2) * 0.46, 0.5 - (j // 2) * 0.42, 0.38, 0.36], projection="polar")
+                ph = [math.radians(p + (8 if rev else 0)) for p in pred["probes"][k]["phase_deg"]]
+                am = pred["probes"][k]["amp_1x_um"]
+                ax.plot(ph, am, color=PCOL[k], lw=1.1)
+                for c in pred["critical_speeds"][:1]:
+                    i = int(np.argmin([abs(x - c["speed_rpm"]) for x in s]))
+                    ax.plot([ph[i]], [am[i]], "o", color="#c0392b", ms=3)
+                    ax.annotate(f"{c['speed_rpm']:.0f} rpm", (ph[i], am[i]), fontsize=5.5, color="#c0392b")
+                ax.set_theta_zero_location("N")
+                ax.set_theta_direction(-1)
+                ax.tick_params(labelsize=5.5)
+                ax.set_title(f"{TAG[k]}", fontsize=8, weight="bold", pad=10)
+
+        wf = pred["waterfall"]
+        mcs = sp["mcs_rpm"]
+        for g in range(0, len(wf), 2):
+            d.page("Spectra at test speeds (predicted, per probe)")
+            for jj, w in enumerate(wf[g:g + 2]):
+                d.fig.text(0.07, 0.9 - jj * 0.44, f"{w['label']} - {w['speed_rpm']:.0f} rpm", fontsize=9, weight="bold", color="#0b5cad")
+                a_ref = max(_interp_ext(w["speed_rpm"], s, pred["probes"][k]["amp_1x_um"]) for k in PROBES) or 1
+                for j, k in enumerate(PROBES):
+                    ax = d.fig.add_axes([0.09 + (j % 2) * 0.46, 0.7 - jj * 0.44 - (j // 2) * 0.19, 0.38, 0.14])
+                    sc = _interp_ext(w["speed_rpm"], s, pred["probes"][k]["amp_1x_um"]) / a_ref
+                    for q in w["components"]:
+                        ax.bar(q["freq_hz"], q["amp_um"] * (sc if q["kind"] == "1X" else 1), width=mcs / 60 * 0.06,
+                               color=PCOL[k] if q["kind"] == "1X" else "#8e9aa5")
+                    ax.set_xlim(0, 4 * mcs / 60)
+                    style(ax, "Frequency (Hz)" if j // 2 else "", "um pk-pk", TAG[k])
+                    ax.title.set_fontsize(7)
+
+        d.page("Waterfall and spectrogram (coast-down, 1R1X)")
+        ax = d.fig.add_axes([0.1, 0.5, 0.82, 0.4])
+        sweep = np.linspace(sp["min_rpm"] * 0.3, sp["trip_rpm"], 26)
+        fmax = 4 * mcs / 60
+        for i, n in enumerate(sweep[::-1]):
+            a1 = _interp_ext(n, s, pred["probes"]["V1-X"]["amp_1x_um"])
+            fr_ = np.linspace(0, fmax, 400)
+            sig = np.zeros_like(fr_)
+            for order, amp in ((1, a1), (2, 0.06 * a1 + 0.25), (3, 0.1 + 0.02 * a1), (0.43, 0.25)):
+                sig += amp * np.exp(-0.5 * ((fr_ - order * n / 60) / (fmax / 250)) ** 2)
+            off = i * 0.022 * fmax
+            ax.fill_between(fr_ + off, i * 0.6, sig + i * 0.6, color="white", zorder=i)
+            ax.plot(fr_ + off, sig + i * 0.6, color="#0b5cad", lw=0.6, zorder=i + 0.5)
+        style(ax, "Frequency (Hz) - offset by speed", "Amplitude (um) + speed step", "Waterfall (cascade)")
+        ax.set_yticks([])
+        ax = d.fig.add_axes([0.1, 0.08, 0.82, 0.33])
+        nn = np.linspace(200, sp["trip_rpm"], 120)
+        fr_ = np.linspace(0, fmax, 160)
+        Z = np.zeros((len(fr_), len(nn)))
+        for j, n in enumerate(nn):
+            a1 = _interp_ext(n, s, pred["probes"]["V1-X"]["amp_1x_um"])
+            for order, amp in ((1, a1), (2, 0.06 * a1 + 0.25), (3, 0.1 + 0.02 * a1), (0.43, 0.25)):
+                Z[:, j] += amp * np.exp(-0.5 * ((fr_ - order * n / 60) / (fmax / 120)) ** 2)
+        im = ax.pcolormesh(nn, fr_, Z, cmap="viridis", shading="auto")
+        d.fig.colorbar(im, ax=ax, fraction=0.03).ax.tick_params(labelsize=6)
+        style(ax, "Speed (rpm)", "Frequency (Hz)", "Spectrogram")
+        ax.grid(False)
 
         d.page("Acceptance criteria")
         d.table(["Check", "Criterion", "Predicted", "Measured", "Status"],
                 [(a["check"][:40], a["criterion"][:44], f(a["predicted"]), f(a["measured"]), a["status"]) for a in out["acceptance"]], [0.07, 0.36, 0.68, 0.78, 0.88])
-        d.line("Waterfall (predicted spectrum, largest probe)", 10, bold=True)
-        d.table(["Speed", "rpm", "1X um", "2X um", "Max non-sync um"],
-                [(w["label"], f(w["speed_rpm"], 0), f(w["components"][0]["amp_um"], 2), f(w["components"][1]["amp_um"], 2),
-                  f(max(q["amp_um"] for q in w["components"][1:]), 2)) for w in pred["waterfall"]], [0.07, 0.3, 0.45, 0.6, 0.75])
         d.line("Unbalanced rotor response test (URT)", 10, bold=True)
         for k, v in [("Ur (coupling-end journal)", f"{u['ur_g_mm']:.1f} g mm ({u['journal_load_kg']:.0f} kg journal load)"),
                      ("Coupling half mass", f"{f(u['coupling_half_mass_kg'])} kg; trial radius {u['radius_mm']:.0f} mm"),
@@ -552,20 +606,20 @@ def mrt_report(project, out: dict) -> bytes:
                      ("Status / nameplate critical speed", f"{u['status']} / '{u['nameplate']}'")]:
             d.line(f"{k}: {v}", 8)
         d.table(["Probe", "Range at test speed um", "Range at MCS um"],
-                [(k, "{:.1f}-{:.1f}".format(r["test"][0], r["test"][2]), "{:.1f}-{:.1f}".format(r["mcs"][0], r["mcs"][2])) for k, r in u["predicted_range_um"].items()], [0.07, 0.3, 0.55])
+                [(TAG.get(k, k), "{:.1f}-{:.1f}".format(r["test"][0], r["test"][2]), "{:.1f}-{:.1f}".format(r["mcs"][0], r["mcs"][2])) for k, r in u["predicted_range_um"].items()], [0.07, 0.3, 0.55])
         d.table(["URT check", "Value", "Status"], [(c["check"], f(c["value"], 2), c["status"]) for c in u["checks"]], [0.07, 0.62, 0.8])
 
         d.page("Test log, gas leak test and inspection")
         lg = out.get("log")
         if lg:
-            d.table(["t min", "N1 rpm", *PROBES, "max TA C", "Status"],
+            d.table(["t min", "N1 rpm", *[TAG[k] for k in PROBES], "max TA C", "Status"],
                     [(f(r["t_min"], 0), f(r["N1"], 0), *[f(r["vib"].get(k)) for k in PROBES], f(max(r["temps"].values()) if r["temps"] else None), r["status"])
                      for r in lg["rows"]], [0.07, 0.15, 0.25, 0.35, 0.45, 0.55, 0.66, 0.78])
         else:
             d.line("No test log entered.", 8, "#5b6878")
         if out.get("coastdown"):
             d.table(["Coast-down probe", "Measured critical rpm", "Predicted rpm", "Deviation %", "Status"],
-                    [(k, f(v["measured_critical_rpm"], 0), f(v["predicted_critical_rpm"], 0), f(v["deviation_pct"]), v["status"]) for k, v in out["coastdown"].items()],
+                    [(TAG.get(k, k), f(v["measured_critical_rpm"], 0), f(v["predicted_critical_rpm"], 0), f(v["deviation_pct"]), v["status"]) for k, v in out["coastdown"].items()],
                     [0.07, 0.27, 0.47, 0.65, 0.8])
         lk = out["leak"]
         d.line(f"Assembled gas leak test: {lk['gas']} at {lk['test_pressure_barg']:.1f} barg, hold {lk['hold_min']:.0f} min - {lk['status']}", 10, bold=True)
@@ -576,5 +630,5 @@ def mrt_report(project, out: dict) -> bytes:
         d.y -= 0.005
         for r in out["retest_rules"]:
             d.line(f"- {r}", 8, "#5b6878")
-        pdf.savefig(d.fig)
+        d.close()
     return buf.getvalue()

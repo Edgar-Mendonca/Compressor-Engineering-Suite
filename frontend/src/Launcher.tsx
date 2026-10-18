@@ -20,9 +20,9 @@ function UpdatePanel({ info }: { info: Json }) {
   const [upd, setUpd] = useState<Json>(null);
   const [st, setSt] = useState<Json>(null);
   const [busy, setBusy] = useState(false);
-  const check = async () => {
+  const check = async (force = false) => {
     setBusy(true);
-    try { setUpd(await api.updateCheck()); } finally { setBusy(false); }
+    try { setUpd(await api.updateCheck(force)); } finally { setBusy(false); }
   };
   useEffect(() => { check(); }, []);
   useEffect(() => {
@@ -41,7 +41,7 @@ function UpdatePanel({ info }: { info: Json }) {
       <div className="mono small muted">Version {info.version} · {info.release_date}{!info.installed && " · running from source"}</div>
       {upd?.available && upd.can_install && !st && <button className="btn primary wide" onClick={install}>Update to {upd.latest}{upd.size_mb ? ` · ${upd.size_mb} MB` : ""}</button>}
       {upd?.available && !upd.can_install && <a className="btn primary wide" href={upd.url} target="_blank" rel="noreferrer">Get {upd.latest} on GitHub ↗</a>}
-      {(!upd || !upd.available) && <button className="btn wide" disabled={busy} onClick={check}>{busy ? "Checking…" : "Check for updates"}</button>}
+      {(!upd || !upd.available) && <button className="btn wide" disabled={busy} onClick={() => check(true)}>{busy ? "Checking…" : "Check for updates"}</button>}
       {st && <div className="progress"><div style={{ width: `${Math.round((st.progress ?? 0) * 100)}%` }} /><span className="mono small">{st.message}</span></div>}
       {upd?.checked && <div className="mono small muted">Checked {ago(upd.checked)} · GitHub Releases</div>}
     </div>

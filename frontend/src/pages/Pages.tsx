@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { api, download, fmt, type Json } from "../api";
 import { Plot, SERIES } from "../components/Plot";
-import { FIELDS, ImpellerFEAView, SectionPlot } from "../components/ImpellerFEAView";
-import { RotorView } from "../components/RotorView";
+import { FIELDS } from "../components/feaFields";
+// three.js views load on demand so the app starts quickly.
+const ImpellerFEAView = lazy(() => import("../components/ImpellerFEAView").then((m) => ({ default: m.ImpellerFEAView })));
+const SectionPlot = lazy(() => import("../components/ImpellerFEAView").then((m) => ({ default: m.SectionPlot })));
+const RotorView = lazy(() => import("../components/RotorView").then((m) => ({ default: m.RotorView })));
+const Lazy = ({ children }: { children: JSX.Element }) => <Suspense fallback={<p className="muted">Loading 3D view…</p>}>{children}</Suspense>;
 import { MeridionalSketch, VelocityTriangles } from "../components/ImpellerSketches";
 import { saveProject } from "../files";
 import { SchemaForm } from "../components/SchemaForm";
@@ -322,10 +326,10 @@ export function ImpellerFEA({ fea }: { fea: Json }) {
         ["Tip radial growth", `${fmt(f.tip_radial_growth_um, 0)} µm`], ["Eye growth / axial shift", `${fmt(f.eye_radial_growth_um, 0)} / ${fmt(f.eye_axial_shift_um, 0)} µm`],
         ["Mesh", `${f.elements} elements · ${f.nodes} nodes`]]} />
       <div className="grid">
-        <ImpellerFEAView key={sel} fea={f} />
+        <Lazy><ImpellerFEAView key={sel} fea={f} /></Lazy>
         <div>
           <div className="chips">{FIELDS.slice(0, 5).map(([k, l]) => <button key={k} className={`chip ${field === k ? "on" : ""}`} onClick={() => setField(k)}>{l}</button>)}</div>
-          <SectionPlot model={f.model} field={field} caseName="MCS" />
+          <Lazy><SectionPlot model={f.model} field={field} caseName="MCS" /></Lazy>
           <p className="muted">Meridional section at MCS ({f.elements} quads; hover an element for its value). Range {fmt(Math.min(...f.model.cases.MCS[field]), 0)}–{fmt(Math.max(...f.model.cases.MCS[field]), 0)}.</p>
           <p className="muted">Eye growth and axial shift feed the eye-seal clearance check; blade stresses need a 3D cyclic-sector model.</p>
         </div>
@@ -482,7 +486,7 @@ export function RotorPage(c: Ctx) {
               Mode {i + 1}: {fmt(m.freq_cpm, 0)} cpm, δ {fmt(m.logdec, 2)}</button>)}
           </div>
         </div>
-        {scene && <RotorView scene={scene} mode={modeShape} />}
+        {scene && <Lazy><RotorView scene={scene} mode={modeShape} /></Lazy>}
         <p className="muted">Drag to orbit, scroll to zoom. Mode animation shows forward whirl of the damped mode shape at MCS (amplitude exaggerated).</p>
       </div>
       <div className="grid" style={{ marginTop: 14 }}>

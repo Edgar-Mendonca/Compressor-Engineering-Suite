@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { fmt, type Json } from "../api";
+import { LiveChart } from "../components/LiveChart";
 import { Plot, SERIES } from "../components/Plot";
 import { safeName, saveFrom, toast } from "../files";
 
@@ -40,10 +41,10 @@ const toCSV = (rows: Json[], cols: string[]) => [cols.join(","), ...rows.map((r)
 
 // ---------------------------------------------------------------- animation
 /** Horizontal cylinder with a vertical gradient. */
-const Cyl = ({ x, y, w, h, g, rx = 3 }: { x: number; y: number; w: number; h: number; g: string; rx?: number }) =>
+export const Cyl = ({ x, y, w, h, g, rx = 3 }: { x: number; y: number; w: number; h: number; g: string; rx?: number }) =>
   <rect x={x} y={y - h / 2} width={w} height={h} rx={rx} fill={`url(#${g})`} stroke="#1d2733" strokeWidth="1" />;
 /** 2.5D box: front face, top and right side. */
-function Box({ x, y, w, h, c, d = 12, children }: { x: number; y: number; w: number; h: number; c: [string, string, string]; d?: number; children?: ReactNode }) {
+export function Box({ x, y, w, h, c, d = 12, children }: { x: number; y: number; w: number; h: number; c: [string, string, string]; d?: number; children?: ReactNode }) {
   return <g>
     <polygon points={`${x},${y} ${x + d},${y - d * 0.7} ${x + w + d},${y - d * 0.7} ${x + w},${y}`} fill={c[0]} stroke="#1d2733" strokeWidth=".8" />
     <polygon points={`${x + w},${y} ${x + w + d},${y - d * 0.7} ${x + w + d},${y + h - d * 0.7} ${x + w},${y + h}`} fill={c[2]} stroke="#1d2733" strokeWidth=".8" />
@@ -53,7 +54,7 @@ function Box({ x, y, w, h, c, d = 12, children }: { x: number; y: number; w: num
 const Shaft = ({ x1, x2, y, r, pat }: { x1: number; x2: number; y: number; r: number; pat: string }) =>
   <g><rect x={x1} y={y - r} width={x2 - x1} height={2 * r} fill="url(#gSteel)" /><rect x={x1} y={y - r} width={x2 - x1} height={2 * r} fill={`url(#${pat})`} opacity=".55" /></g>;
 
-function Gear({ cx, cy, r, teeth, ang, fill }: { cx: number; cy: number; r: number; teeth: number; ang: number; fill: string }) {
+export function Gear({ cx, cy, r, teeth, ang, fill }: { cx: number; cy: number; r: number; teeth: number; ang: number; fill: string }) {
   const p: string[] = [];
   for (let i = 0; i < teeth * 2; i++) { const a = (i * Math.PI) / teeth; const rr = i % 2 ? r : r * 0.88; p.push(`${cx + rr * Math.cos(a)},${cy + rr * Math.sin(a)}`); }
   return <g transform={`rotate(${ang} ${cx} ${cy})`}><polygon points={p.join(" ")} fill={fill} stroke="#1d2733" strokeWidth=".8" />
@@ -90,21 +91,24 @@ function TrainAnim({ d }: { d: Json }) {
   const [playing, setPlaying] = useState(false);
   const [, setFrame] = useState(0);
   const st = useRef({ mul, playing }); st.current = { mul, playing };
+  // Animation loop only while playing; about 30 frames per second so the page stays light.
   useEffect(() => {
-    let raf = 0;
+    if (!playing) return;
+    let raf = 0, acc = 0;
     const f = (now: number) => {
       const dt = last.current ? Math.min((now - last.current) / 1000, 0.1) : 0; last.current = now;
-      if (st.current.playing) { t.current = Math.min(t.current + (dt * st.current.mul) / 60, dur); if (t.current >= dur) setPlaying(false); }
+      t.current = Math.min(t.current + (dt * st.current.mul) / 60, dur); if (t.current >= dur) setPlaying(false);
       const n = lerp(plan.t_min, plan.speed_rpm, t.current);
       phi.current += dt * 1.6 * (n / sp.rated_rpm);                       // visual rev/s, proportional to speed
       phiD.current += (dt * 1.6 * (n / sp.rated_rpm)) / tr.gear_ratio;
       flow.current += dt * 30 * lerp(plan.t_min, plan.oil_p_barg, t.current);
-      setFrame((k) => (k + 1) % 1e6);
+      acc += dt;
+      if (acc >= 1 / 30) { acc = 0; setFrame((k) => (k + 1) % 1e6); }
       raf = requestAnimationFrame(f);
     };
     raf = requestAnimationFrame(f);
-    return () => cancelAnimationFrame(raf);
-  }, [plan, sp, tr, dur]);
+    return () => { cancelAnimationFrame(raf); last.current = 0; };
+  }, [playing, plan, sp, tr, dur]);
 
   const now = t.current;
   const n = lerp(plan.t_min, plan.speed_rpm, now);
@@ -127,7 +131,7 @@ function TrainAnim({ d }: { d: Json }) {
   place("motor", 230, 0); place("lsc", 64, 0);
   if (geared) { place("gear", 150, 0); place("hsc", 64, 0); }
   casings.forEach((_, i) => { place(`cas${i}`, 270, 0); if (i < casings.length - 1) place(`ic${i}`, 56, 0); });
-  const W = x + 40;
+  const W = x + 64;
   const stripes = (id: string, p: number) => <pattern id={id} width="10" height="40" patternUnits="userSpaceOnUse" patternTransform={`translate(0 ${(p * 4 * 10) % 40})`}>
     <rect width="10" height="40" fill="none" /><path d="M0 0 L10 10 M0 20 L10 30" stroke="#1d2733" strokeWidth="3" /></pattern>;
   const fins = (x0: number, w: number, y0: number, h: number) => Array.from({ length: Math.floor(w / 8) }, (_, i) => <line key={i} x1={x0 + 4 + i * 8} x2={x0 + 4 + i * 8} y1={y0} y2={y0 + h} stroke="#0a3d73" strokeWidth="2.2" opacity=".8" />);
@@ -203,7 +207,7 @@ function TrainAnim({ d }: { d: Json }) {
           <rect x={mx + mw - 22} y={YD - 44} width={16} height={88} rx="4" fill="url(#gHead)" stroke="#1d2733" />
           <Box x={mx + mw / 2 - 30} y={YD - 82} w={60} h={26} c={["#6f9fd8", "#2a66ac", "#164479"]} d={8} />
           <text x={mx + mw / 2} y={YD + 6} textAnchor="middle" className="mrt-name">MOTOR</text>
-          <text x={mx + mw / 2} y={330} textAnchor="middle" className="mrt-lab">{comps.find((c) => c.kind === "motor" || c.kind === "turbine")?.name} · {fmt(n / ratio, 0)} rpm</text>
+          <text x={mx + mw / 2} y={330} textAnchor="middle" className="mrt-lab">{comps.find((c) => c.kind === "motor" || c.kind === "turbine")?.name}</text>
           {/* LS (or only) coupling with guard */}
           {(() => { const [cx, cw] = at.lsc, yy = geared ? YD : Y; return <g>
             <rect x={cx + 6} y={yy - 22} width={14} height={44} fill="url(#gSteel)" stroke="#1d2733" /><rect x={cx + cw - 20} y={yy - 22} width={14} height={44} fill="url(#gSteel)" stroke="#1d2733" />
@@ -218,7 +222,8 @@ function TrainAnim({ d }: { d: Json }) {
               <Gear cx={gx + gw * 0.42 + 44 + 15} cy={Y} r={17} teeth={11} ang={angP} fill="#c4ccd6" />
               <rect x={gx + 14} y={YD - 58} width={gw - 28} height={120} rx="6" fill="none" stroke="#e69f00" strokeDasharray="5 3" />
             </Box>
-            <text x={gx + gw / 2} y={330} textAnchor="middle" className="mrt-lab">Gearbox i = {fmt(ratio, 2)} · bull {fmt(n / ratio, 0)} / pinion {fmt(n, 0)} rpm</text>
+            <text x={gx + gw / 2} y={330} textAnchor="middle" className="mrt-lab">Gearbox i = {fmt(ratio, 2)}</text>
+            <text x={gx + gw / 2} y={343} textAnchor="middle" className="mrt-lab">{fmt(n / ratio, 0)} / {fmt(n, 0)} rpm</text>
             {(() => { const [cx, cw] = at.hsc; return <g>
               <rect x={cx + 6} y={Y - 18} width={12} height={36} fill="url(#gSteel)" stroke="#1d2733" /><rect x={cx + cw - 18} y={Y - 18} width={12} height={36} fill="url(#gSteel)" stroke="#1d2733" />
               <rect x={cx + 6} y={Y - 18} width={12} height={36} fill="url(#pC)" opacity=".5" /><rect x={cx + cw - 18} y={Y - 18} width={12} height={36} fill="url(#pC)" opacity=".5" />
@@ -239,10 +244,10 @@ function TrainAnim({ d }: { d: Json }) {
               <rect x={(nx as number) - 8} y={Y - 114} width={44} height={10} fill="url(#gHead)" stroke="#1d2733" />
               <text x={(nx as number) + 14} y={Y - 120} textAnchor="middle" className="mrt-lab">{l}</text></g>)}
             <text x={cx + cw / 2} y={Y + 5} textAnchor="middle" className="mrt-name">CASING {i + 1}</text>
-            {housing(b1, Y, "V1", "V1")}{housing(b2, Y, "V2", "V2")}
+            {housing(b1, Y, "1R1", "V1")}{housing(b2, Y, "1R2", "V2")}
             <rect x={b2 + 16} y={Y - 6} width={10} height={12} fill="#2b3542" />
             <text x={cx + cw / 2} y={330} textAnchor="middle" className="mrt-lab">Casing {i + 1} ({casings[i].source}) · {fmt(n, 0)} rpm</text>
-            <text x={cx + cw / 2} y={343} textAnchor="middle" className="mrt-lab">V1 DE · V2 NDE + thrust · V5/V6 axial</text>
+            <text x={cx + cw / 2} y={343} textAnchor="middle" className="mrt-lab">1R1 drive end · 1R2 non-drive end + thrust · axial probes</text>
           </g>; })}
           {/* oil console and piping */}
           <g>
@@ -260,24 +265,25 @@ function TrainAnim({ d }: { d: Json }) {
           </g>
           {/* live tags */}
           {casings.length > 0 && (() => { const [cx, cw] = at.cas0; return <>
-            {tag(cx - 6, 18, [["V1-X", `${fmt(vib["V1-X"], 1)} µm`, level(vib["V1-X"] / lim)], ["V1-Y", `${fmt(vib["V1-Y"], 1)} µm`, level(vib["V1-Y"] / lim)],
+            {tag(cx - 118, 18, [["1R1X", `${fmt(vib["V1-X"], 1)} µm`, level(vib["V1-X"] / lim)], ["1R1Y", `${fmt(vib["V1-Y"], 1)} µm`, level(vib["V1-Y"] / lim)],
               ["Brg 1", `${fmt(btemp[0]?.[1], 0)} °C`, tlevel(btemp[0]?.[1] ?? 0, d.bearing_temp_limit_c)]])}
-            {tag(cx + cw - 98, 18, [["V2-X", `${fmt(vib["V2-X"], 1)} µm`, level(vib["V2-X"] / lim)], ["V2-Y", `${fmt(vib["V2-Y"], 1)} µm`, level(vib["V2-Y"] / lim)],
+            {tag(cx + cw - 46, 18, [["1R2X", `${fmt(vib["V2-X"], 1)} µm`, level(vib["V2-X"] / lim)], ["1R2Y", `${fmt(vib["V2-Y"], 1)} µm`, level(vib["V2-Y"] / lim)],
               ["Brg 2", `${fmt(btemp[1]?.[1], 0)} °C`, tlevel(btemp[1]?.[1] ?? 0, d.bearing_temp_limit_c)]])}</>; })()}
         </svg>
         <div className="mrt-controls">
           <button className="btn primary" onClick={() => { if (t.current >= dur) t.current = 0; setPlaying(!playing); }}>{playing ? "Pause" : now > 0 && now < dur ? "Resume" : "Play test"}</button>
-          <button className="btn" onClick={() => { t.current = 0; setPlaying(false); }}>Reset</button>
+          <button className="btn" onClick={() => { t.current = 0; setPlaying(false); setFrame((k) => k + 1); }}>Reset</button>
           <div className="seg">{MULS.map((m) => <button key={m} className={mul === m ? "on" : ""} onClick={() => setMul(m)}>{m}×</button>)}</div>
-          <input type="range" className="mrt-scrub" min={0} max={dur} step={0.25} value={now} onChange={(e) => { t.current = Number(e.target.value); }} aria-label="Test time" />
+          <input type="range" className="mrt-scrub" min={0} max={dur} step={0.25} value={now} onChange={(e) => { t.current = Number(e.target.value); setFrame((k) => k + 1); }} aria-label="Test time" />
           <span className="mono small">{hhmm(now)} of {hhmm(dur)} h:min</span>
         </div>
+        <LivePanel d={d} now={now} n={n} vib={vib} />
       </div>
       <aside className="mrt-side">
         <Tacho n={n} max={Math.ceil((sp.trip_rpm * 1.12) / 1000) * 1000} trip={sp.trip_rpm} crit={crit}
           marks={[["MSS", sp.min_rpm], ["MCS", sp.mcs_rpm], ["TRIP", sp.trip_rpm]]} />
         <div className="mrt-bars">
-          {PROBES.map((k) => { const r = vib[k] / lim; return <div key={k} className="mrt-bar"><span className="mono">{k}</span>
+          {PROBES.map((k) => { const r = vib[k] / lim; return <div key={k} className="mrt-bar"><span className="mono">{TAGN[k]}</span>
             <div><i style={{ width: `${Math.min(r, 1.2) / 1.2 * 100}%`, background: level(r) }} /><b style={{ left: `${100 / 1.2}%` }} /></div><span className="mono">{fmt(vib[k], 1)}</span></div>; })}
           {btemp.map(([k, v]) => { const r = v / d.bearing_temp_limit_c; return <div key={k} className="mrt-bar"><span className="mono">{k.replace("Bearing ", "Brg ").replace(" (active)", "")}</span>
             <div><i style={{ width: `${Math.min(r, 1.2) / 1.2 * 100}%`, background: tlevel(v, d.bearing_temp_limit_c) }} /><b style={{ left: `${100 / 1.2}%` }} /></div><span className="mono">{fmt(v, 0)} °C</span></div>; })}
@@ -288,7 +294,7 @@ function TrainAnim({ d }: { d: Json }) {
             <circle r="30" fill="none" stroke="#d6453a" strokeDasharray="3 3" /><line x1="-46" x2="46" stroke="var(--line)" /><line y1="-46" y2="46" stroke="var(--line)" />
             <ellipse rx={30 * ax + 0.5} ry={30 * ay + 0.5} fill="none" stroke="var(--accent)" strokeWidth="2" transform="rotate(-30)" />
             <circle cx={(30 * ax) * Math.cos(a) * Math.cos(-0.52) - (30 * ay) * Math.sin(a) * Math.sin(-0.52)} cy={(30 * ax) * Math.cos(a) * Math.sin(-0.52) + (30 * ay) * Math.sin(a) * Math.cos(-0.52)} r="3.5" fill="#d6453a" />
-            <text x="-46" y="-40" fontSize="9" fill="var(--muted)">{b} orbit</text><text x="46" y="46" fontSize="7" textAnchor="end" fill="#d6453a">dashed = limit</text></svg>; })}</div>
+            <text x="-46" y="-40" fontSize="9" fill="var(--muted)">{b === "V1" ? "1R1" : "1R2"} orbit</text><text x="46" y="46" fontSize="7" textAnchor="end" fill="#d6453a">dashed = limit</text></svg>; })}</div>
         <svg viewBox="0 0 360 112" className="mrt-mini" role="img" aria-label="Speed-time plan">
           {plan.segments.map((s: Json, i: number) => <rect key={i} x={MX(s.t0_min)} y={96} width={Math.max(MX(s.t1_min) - MX(s.t0_min), 0.5)} height={8} fill={PHASE_COL[s.phase]} opacity={s === seg ? 1 : 0.55} />)}
           {crit.map((c) => <g key={c}><line x1={8} x2={352} y1={MY(c)} y2={MY(c)} stroke="#d6453a" strokeDasharray="3 3" /><text x={350} y={MY(c) - 2} fontSize="7" textAnchor="end" fill="#d6453a">Nc {Math.round(c)}</text></g>)}
@@ -299,6 +305,40 @@ function TrainAnim({ d }: { d: Json }) {
         <div className="mrt-legend">{Object.entries(PHASE_COL).map(([k, c]) => <span key={k}><i style={{ background: c }} />{k}</span>)}</div>
         <div className="mono small">Oil {fmt(oilT, 1)} °C / {fmt(oilP, 2)} barg · {seg?.oil_t} T / {seg?.oil_p} P</div>
       </aside>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- live charts under the train
+export const TAGN: Record<string, string> = { "V1-X": "1R1X", "V1-Y": "1R1Y", "V2-X": "1R2X", "V2-Y": "1R2Y" };
+const PCOL: Record<string, string> = { "V1-X": "#0b5cad", "V1-Y": "#7b3fb5", "V2-X": "#2e9e6b", "V2-Y": "#d1782a" };
+
+function LivePanel({ d, now, n, vib }: { d: Json; now: number; n: number; vib: Record<string, number> }) {
+  const al = d.along, pr = d.prediction, sp = d.speeds, lim = d.limit_um;
+  const [probe, setProbe] = useState("V1-X");
+  const i = Math.max(bisect(al.t_min, now), 1);
+  const th = al.t_min.slice(0, i + 1).map((v: number) => v / 60);
+  const crit: number[] = pr.critical_speeds.map((c: Json) => c.speed_rpm);
+  const a1 = vib[probe] || 0, f1 = n / 60, fm = (4 * sp.mcs_rpm) / 60;
+  const comp = n > 50 ? [[1, a1, "1X"], [2, 0.06 * a1 + 0.25, "2X"], [3, 0.1 + 0.02 * a1, "3X"], [0.43, 0.25, "sub"]] as [number, number, string][] : [];
+  return (
+    <div className="mrt-live">
+      <div className="mrt-live-head"><b>Live test charts</b>
+        <div className="seg">{PROBES.map((k) => <button key={k} className={probe === k ? "on" : ""} onClick={() => setProbe(k)}>{TAGN[k]}</button>)}</div></div>
+      <LiveChart title="Trend · shaft vibration (µm pk-pk) and speed" xl="Time (h)" yl="µm pk-pk" yr="rpm" h={200}
+        xr={[0, d.plan.duration_min / 60]} yrange={[0, lim * 1.1]} y2range={[0, sp.trip_rpm * 1.08]} cursor={now / 60}
+        hlines={[{ y: lim, color: "#c0392b", label: `limit ${fmt(lim, 1)}` }]}
+        series={[...PROBES.map((k) => ({ x: th, y: al[k].slice(0, i + 1), color: PCOL[k], name: TAGN[k], width: 1.4 })),
+          { x: th, y: al.speed_rpm.slice(0, i + 1), color: "#8e9aa5", right: true, fill: true, width: 1.2, name: "speed" }]} />
+      <div className="mrt-live-row">
+        <LiveChart title={`Bode · ${TAGN[probe]} 1X amplitude`} xl="Speed (rpm)" yl="µm pk-pk" h={180} xr={[0, sp.trip_rpm * 1.04]}
+          vlines={crit.slice(0, 2).map((c) => ({ x: c, color: "#c0392b", label: `Nc ${Math.round(c)}` }))}
+          series={[{ x: pr.speeds_rpm, y: pr.probes[probe].amp_1x_um, color: PCOL[probe], fill: true, width: 1.6 }]}
+          markers={n > 50 ? [{ x: n, y: lerp(pr.speeds_rpm, pr.probes[probe].amp_1x_um, n), color: "#c0392b", label: `${Math.round(n)} rpm` }] : []} legend={false} />
+        <LiveChart title={`Spectrum · ${TAGN[probe]} at ${Math.round(n)} rpm`} xl="Frequency (Hz)" yl="µm" h={180} xr={[0, fm]}
+          yrange={[0, Math.max(lim * 0.5, a1 * 1.25, 1)]} bars={comp.map(([o, a, l]) => ({ x: o * f1, y: a, color: l === "1X" ? PCOL[probe] : "#8e9aa5", label: l }))}
+          series={[]} legend={false} />
+      </div>
     </div>
   );
 }

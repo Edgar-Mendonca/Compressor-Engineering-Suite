@@ -3,6 +3,14 @@
 Release notes shown on the launcher. Newest first. Releases are published
 from version tags (vX.Y.Z) with a Windows installer attached.
 
+## 0.5.0 - 2026-10-18
+- New module: performance test to ASME PTC 10-2022 - Type 1 (specified gas) or Type 2 (substitute gas) with every test-gas combination (CO2, N2, R134a, CO2/N2, He/N2, custom) screened against the PTC 10 similarity limits, stand limits, critical speeds and the phase envelope; the export gas example loads a CO2 Type 2 test
+- Animated 2.5D closed test loop: gas flow coloured by temperature, control valve, cooler, orifice, gas charging, anti-surge, dry-gas-seal panel, live instruments and test map, run a speed line to surge
+- Data reduction: ISO 5167 orifice, static-to-total conversion, Sandberg-Colby / Schultz / path head, casing heat loss, conversion to specified conditions, optional speed adjustment, PTC 19.1 uncertainty, API 617 acceptance (head, power 104 %, surge), coast-down check, test log import / export, PDF report
+- Mechanical running test: live trend, Bode and spectrum charts under the animated train, probes named 1R1X / 1R1Y / 1R2X / 1R2Y, report with the drawn test train, set-up table, trend chart, Bode and polar plots per probe, spectra per test speed, waterfall and spectrogram
+- Faster and more responsive: the engineering engine runs in its own process (no more "Not responding" during analyses, auto-restart if it stops), animations only redraw while playing, heavy pages and the 3D views load on demand (start-up bundle 800 kB -> 300 kB), progress and Cancel for analysis runs, update check cached
+- R134a added to the property components
+
 ## 0.4.1 - 2026-10-18
 - Modules in engineering order: materials, impeller design, impeller FEA, rotor, bearings, shop tests, lateral & stability, torsional, mechanical running test, systems, reports
 - Impeller design: velocity triangles, blade angles, de Haller ratio, meridional sketch, vendor-data override with estimate-vs-vendor table
