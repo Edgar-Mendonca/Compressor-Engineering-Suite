@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { fmt, type Json } from "../api";
-import { Plot, SERIES } from "../components/Plot";
 
 // API 617 shop-test simulator (backend testing/shoptest.py): balancing limits, residual
-// unbalance check, high-speed (influence-coefficient) balancing, mechanical running test,
-// impeller overspeed test record and rotor thrust, with animations.
+// unbalance check, high-speed (influence-coefficient) balancing, impeller overspeed test record
+// and rotor thrust, with animations. The mechanical running test is its own module (MechRunTest.tsx).
 
 type Ctx = { project: Json; results: Json; casing: number; setProject: (p: Json) => void };
-const TABS = ["Balancing", "Residual unbalance check", "High-speed balance", "Mechanical running test", "Overspeed test record", "Thrust"];
+const TABS = ["Balancing", "Residual unbalance check", "High-speed balance", "Overspeed test record", "Thrust"];
 const post = async (url: string, body: unknown) => {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? r.statusText);
@@ -52,51 +51,6 @@ function Polar({ pts, fit, maxv }: { pts: [number, number][]; fit?: { angle_deg:
   );
 }
 
-/** Running test animation: speed ramps along the predicted response, live orbit and readout. */
-function RunUp({ curves, limit, mcs }: { curves: Json[]; limit: number; mcs: number }) {
-  const [t, setT] = useState(0);
-  const [play, setPlay] = useState(false);
-  const raf = useRef(0);
-  useEffect(() => {
-    if (!play) return;
-    const s = performance.now() - t * 1000;
-    const f = () => { const tt = (performance.now() - s) / 1000; setT(tt); if (tt < 12) raf.current = requestAnimationFrame(f); else setPlay(false); };
-    raf.current = requestAnimationFrame(f);
-    return () => cancelAnimationFrame(raf.current);
-  }, [play]); // eslint-disable-line react-hooks/exhaustive-deps
-  const c = curves[0];
-  if (!c) return null;
-  const sp: number[] = c.speeds_rpm, amp: number[] = c.amplitude_um;
-  const smax = Math.max(...sp);
-  const frac = Math.min(t / 8, 1);
-  const n = t < 8 ? frac * Math.min(smax, mcs * 1.05) : mcs;
-  const i = sp.findIndex((x) => x >= n);
-  const a = i < 0 ? amp[amp.length - 1] : amp[Math.max(i, 0)];
-  const amax = Math.max(...amp, limit) * 1.1;
-  const X = (x: number) => 40 + (x / smax) * 400, Y = (y: number) => 190 - (y / amax) * 170;
-  return (
-    <div className="grid" style={{ gridTemplateColumns: "1fr 220px" }}>
-      <svg viewBox="0 0 460 220" className="runup" role="img" aria-label="Run-up">
-        <line x1="40" y1="190" x2="440" y2="190" stroke="#000" /><line x1="40" y1="20" x2="40" y2="190" stroke="#000" />
-        <polyline fill="none" stroke="#b9bfc2" strokeWidth="1.5" points={sp.map((x, k) => `${X(x)},${Y(amp[k])}`).join(" ")} />
-        <polyline fill="none" stroke="#0B5CAD" strokeWidth="2.5" points={sp.filter((x) => x <= n).map((x, k) => `${X(x)},${Y(amp[k])}`).join(" ")} />
-        <line x1="40" x2="440" y1={Y(limit)} y2={Y(limit)} stroke="#C0392B" strokeDasharray="6 4" /><text x="436" y={Y(limit) - 4} textAnchor="end" fontSize="10" fill="#C0392B">API limit {fmt(limit, 1)} µm</text>
-        <line x1={X(mcs)} x2={X(mcs)} y1="20" y2="190" stroke="#009E73" strokeDasharray="3 3" /><text x={X(mcs)} y="16" textAnchor="middle" fontSize="10">MCS</text>
-        <circle cx={X(n)} cy={Y(a)} r="5" fill="#D55E00" />
-        <text x="240" y="214" textAnchor="middle" fontSize="11">Speed (rpm) — {c.case}, probe at {c.probe} m</text>
-      </svg>
-      <div>
-        <svg viewBox="0 0 200 200" className="rface"><circle cx="100" cy="100" r="80" fill="none" stroke="#d3d7d6" />
-          <circle cx="100" cy="100" r={(limit / amax) * 80} fill="none" stroke="#C0392B" strokeDasharray="5 3" />
-          <ellipse cx="100" cy="100" rx={(a / amax) * 80} ry={(a / amax) * 60} fill="none" stroke="#0B5CAD" strokeWidth="2.5" transform={`rotate(${30} 100 100)`} />
-          <circle cx={100 + (a / amax) * 80 * Math.cos(t * 12)} cy={100 + (a / amax) * 60 * Math.sin(t * 12)} r="4" fill="#D55E00" /></svg>
-        <div className="mono small">{Math.round(n)} rpm · {fmt(a, 1)} µm pk-pk · {t >= 8 ? (t < 12 ? "holding at MCS" : "done") : "run-up"}</div>
-        <button className="btn primary" onClick={() => { setT(0); setPlay(true); }}>{play ? "Restart" : "Play run-up"}</button>
-      </div>
-    </div>
-  );
-}
-
 export function ShopTestsPage(c: Ctx) {
   const [tab, setTab] = useState(0);
   const [d, setD] = useState<Json>(null);
@@ -106,7 +60,6 @@ export function ShopTestsPage(c: Ctx) {
   const [ib, setIb] = useState<Json>({ initial: [{ probe: "Bearing 1", amp: 30, phase: 40 }, { probe: "Bearing 2", amp: 22, phase: 160 }],
     trials: [{ plane: "Plane 1", weight_g_mm: 500, angle_deg: 0, readings: [{ probe: "Bearing 1", amp: 18, phase: 70 }, { probe: "Bearing 2", amp: 25, phase: 150 }] },
       { plane: "Plane 2", weight_g_mm: 500, angle_deg: 0, readings: [{ probe: "Bearing 1", amp: 26, phase: 30 }, { probe: "Bearing 2", amp: 12, phase: 200 }] }] });
-  const [readings, setReadings] = useState<Json[]>([{ speed_rpm: 0, probe: "Bearing 1", amplitude_um: "" }]);
   const [osm, setOsm] = useState<Json[]>(["Bore", "Eye", "Tip", "Shroud OD"].map((l) => ({ location: l, before_mm: "", after_mm: "" })));
 
   const seq = useRef(0);
@@ -119,7 +72,7 @@ export function ShopTestsPage(c: Ctx) {
     } catch (e) { if (id === seq.current) setErr((e as Error).message); } finally { if (id === seq.current) setBusy(false); }
   };
   useEffect(() => { if (c.results) load(); }, [c.results, c.casing]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!c.results) return <><h2>Shop tests (API 617)</h2><p className="muted">Run the analysis first.</p></>;
+  if (!c.results) return <><h2>Shop tests: balancing & overspeed</h2><p className="muted">Run the analysis first.</p></>;
   const allow = d?.rotor_balance?.[0]?.governing_g_mm ?? 0;
   const trial = rc.trial_g_mm || Math.round(allow * 1.5);
   const nums = (rows: Json[]) => rows.filter((q) => q.amp !== "" && !Number.isNaN(Number(q.amp)));
@@ -128,16 +81,17 @@ export function ShopTestsPage(c: Ctx) {
     if (rows.length < 4) { setErr("Enter at least 4 amplitude readings"); return; }
     load({ residual: { angles_deg: rows.map((q) => q.angle), amplitudes: rows.map((q) => Number(q.amp)), trial_g_mm: trial, allowable_g_mm: allow } });
   };
-  const res = d?.residual_check, inf = d?.influence, rt = d?.running_test, th = d?.thrust, os = d?.overspeed;
+  const res = d?.residual_check, inf = d?.influence, th = d?.thrust, os = d?.overspeed;
 
   return (
     <>
-      <h2>Shop tests (API 617)</h2>
+      <h2>Shop tests: balancing & overspeed</h2>
       <p className="lead">Plan and evaluate the shop tests: component and rotor balancing limits, the residual unbalance check, at-speed balancing with influence
-        coefficients, the mechanical running test and the impeller overspeed test record, plus the rotor thrust balance. Enter test readings to get pass / fail.</p>
+        coefficients and the impeller overspeed test record, plus the rotor thrust balance. Enter test readings to get pass / fail. The mechanical running
+        test (API 617 8.3.2) is planned and evaluated in the Mechanical running test module.</p>
       {err && <div className="error">{err}</div>}
       {d && <div className="kpis">{[["Rotor class", `${d.rotor_class.class} (N/Nc1 ${fmt(d.rotor_class.ratio_mcs_to_first_critical, 2)})`],
-        ["Allowable unbalance / plane", `${fmt(allow, 1)} g·mm`], ["Running-test limit", `${fmt(rt.limit_um, 1)} µm pk-pk`], ["MCS", `${fmt(d.speeds.mcs_rpm, 0)} rpm`],
+        ["Allowable unbalance / plane", `${fmt(allow, 1)} g·mm`], ["MCS", `${fmt(d.speeds.mcs_rpm, 0)} rpm`],
         ["Thrust bearing load ratio", fmt(th?.load_ratio, 2)]].map(([l, x]) => <div className="kpi" key={l}><div className={`v ${String(x).length > 16 ? "long" : ""}`}>{x}</div><div className="l">{l}</div></div>)}</div>}
       <div className="seg" style={{ marginBottom: 14 }}>{TABS.map((t, i) => <button key={t} className={tab === i ? "on" : ""} onClick={() => setTab(i)}>{t}</button>)}</div>
       {busy && <p className="muted">Calculating…</p>}
@@ -200,29 +154,7 @@ export function ShopTestsPage(c: Ctx) {
             : <p className="muted">Enter the initial run and one trial run per plane, then calculate.</p>}</div>
       </div>}
 
-      {d && tab === 3 && <>
-        <div className="card"><h3>Test plan · vibration limit {fmt(rt.limit_um, 1)} µm pk-pk (25.4 √(12000/N))</h3>
-          <table className="t"><thead><tr><th>Step</th><th>Activity</th><th>Speed rpm</th><th>Duration</th></tr></thead>
-            <tbody>{rt.plan.map((q: Json) => <tr key={q.step}><td>{q.step}</td><td>{q.activity}</td><td className="n">{fmt(q.speed_rpm, 0)}</td><td>{q.duration}</td></tr>)}</tbody></table></div>
-        <div className="card" style={{ marginTop: 14 }}><h3>Run-up animation (predicted unbalance response)</h3>
-          <RunUp curves={rt.predicted} limit={rt.limit_um} mcs={d.speeds.mcs_rpm} /></div>
-        <div className="grid" style={{ marginTop: 14 }}>
-          <div className="card"><h3>Predicted response</h3>
-            <Plot height={320} data={[...rt.predicted.slice(0, 6).map((q: Json) => ({ x: q.speeds_rpm, y: q.amplitude_um, name: `${q.case} @ ${q.probe} m`, mode: "lines" })),
-              { x: [0, Math.max(...(rt.predicted[0]?.speeds_rpm ?? [1]))], y: [rt.limit_um, rt.limit_um], name: "API limit", mode: "lines", line: { dash: "dash", color: SERIES[1] } }]}
-              layout={{ xaxis: { title: "Speed (rpm)" }, yaxis: { title: "Amplitude (µm pk-pk)" } }} /></div>
-          <div className="card"><h3>Test readings {rt.evaluation.length > 0 && <Pill s={rt.status} />}</h3>
-            <table className="t"><thead><tr><th>Speed rpm</th><th>Probe</th><th>Amplitude µm</th><th>Status</th></tr></thead>
-              <tbody>{readings.map((q, i) => <tr key={i}>
-                <td><input className="inp cell" type="number" value={q.speed_rpm} onChange={(e) => setReadings(readings.map((x, j) => (j === i ? { ...x, speed_rpm: Number(e.target.value) } : x)))} /></td>
-                <td><input className="inp cell" value={q.probe} onChange={(e) => setReadings(readings.map((x, j) => (j === i ? { ...x, probe: e.target.value } : x)))} /></td>
-                <td><input className="inp cell" type="number" step="any" value={q.amplitude_um} onChange={(e) => setReadings(readings.map((x, j) => (j === i ? { ...x, amplitude_um: e.target.value } : x)))} /></td>
-                <td>{rt.evaluation[i] && <Pill s={rt.evaluation[i].status} />}</td></tr>)}</tbody></table>
-            <div className="row" style={{ marginTop: 8 }}><button className="btn" onClick={() => setReadings([...readings, { speed_rpm: d.speeds.mcs_rpm, probe: "Bearing 1", amplitude_um: "" }])}>Add reading</button>
-              <button className="btn primary" onClick={() => load({ running_readings: readings.filter((q) => q.amplitude_um !== "").map((q) => ({ ...q, amplitude_um: Number(q.amplitude_um) })) })}>Evaluate</button></div></div>
-        </div></>}
-
-      {d && tab === 4 && <div className="grid">
+      {d && tab === 3 && <div className="grid">
         <div className="card"><h3>Overspeed test (115 % MCS, ≥ 1 min) — record sheet</h3>
           <table className="t"><thead><tr><th>Location</th><th>Diameter before mm</th><th>After mm</th><th>Change µm (radial)</th><th>Allowable µm</th><th>Status</th></tr></thead>
             <tbody>{osm.map((q, i) => { const row = os?.rows?.find((x: Json) => x.location === q.location); return <tr key={q.location}><td>{q.location}</td>
@@ -232,10 +164,10 @@ export function ShopTestsPage(c: Ctx) {
           <button className="btn primary" style={{ marginTop: 8 }} onClick={() => load({ overspeed_measured: osm.filter((q) => q.before_mm !== "" && q.after_mm !== "").map((q) => ({ location: q.location, before_mm: Number(q.before_mm), after_mm: Number(q.after_mm) })) })}>Evaluate</button></div>
         <div className="card"><h3>Predicted by the 3D FEA {os && <Pill s={os.status} />}</h3>
           {Object.keys(os?.predicted_um ?? {}).length ? <table className="t"><tbody>{Object.entries(os.predicted_um).map(([k, x]) => <tr key={k}><td>{k}</td><td className="n">{fmt(x as number, 2)} µm permanent (radial)</td></tr>)}</tbody></table>
-            : <p className="muted">Run the 3D FEA (Impellers & FEA → Impeller FEA Pro) to predict the permanent growth; its Spin test tab animates the test.</p>}</div>
+            : <p className="muted">Run the 3D FEA (Impeller FEA validation) to predict the permanent growth; its Spin test tab animates the test.</p>}</div>
       </div>}
 
-      {d && tab === 5 && th && <div className="grid">
+      {d && tab === 4 && th && <div className="grid">
         <div className="card"><h3>Impeller thrust (Δp on the eye-seal annulus + momentum)</h3>
           <table className="t"><thead><tr><th>Impeller</th><th>Δp bar</th><th>Eye seal mm</th><th>Thrust kN</th></tr></thead>
             <tbody>{th.impellers.map((q: Json) => <tr key={q.impeller}><td>{q.impeller}</td><td className="n">{fmt(q.dp_bar, 2)}</td><td className="n">{fmt(q.eye_seal_mm, 0)}</td><td className="n">{fmt(q.thrust_kn, 1)}</td></tr>)}</tbody></table></div>

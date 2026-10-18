@@ -35,7 +35,7 @@ from compsuite.mechanical.rotor import build_rotor, fe_model
 from compsuite.mechanical.shaft import shaft_integrity
 from compsuite.piping.flow import piping_analysis
 from compsuite.rotordynamics import fe
-from compsuite.rotordynamics.lateral import lateral_analysis
+from compsuite.rotordynamics.lateral import bearing_cases, lateral_analysis
 from compsuite.seals.seals import seal_analysis
 from compsuite.standards.checklist import build_checklist
 from compsuite.structural.disk import impeller_stress
@@ -126,15 +126,18 @@ def run_project(project, level: str = "full") -> dict:
         sub = dict(sizing, stages=stages)
         torque = power_w / omega
         d0 = (16 * torque * project.shaft.torque_transient_factor / (math.pi * 0.15 * shaft_mat["yield_mpa"] * 1e6)) ** (1 / 3)
-        imps = impeller_set(sub, gas, max(d0, 0.06), imp_mat, project.criteria)
+        imps = impeller_set(sub, gas, max(d0, 0.06), imp_mat, project.criteria,
+                             [v.model_dump() for v in getattr(project, "impeller_vendor", [])])
         rotor = build_rotor(project, sizing, stages, imps["impellers"], power_w, shaft_mat, imp_mat)
-        imps = impeller_set(sub, gas, rotor["shaft_diameter_impellers_m"], imp_mat, project.criteria)
+        imps = impeller_set(sub, gas, rotor["shaft_diameter_impellers_m"], imp_mat, project.criteria,
+                             [v.model_dump() for v in getattr(project, "impeller_vendor", [])])
         rotor = build_rotor(project, sizing, stages, imps["impellers"], power_w, shaft_mat, imp_mat)
 
         # Bearings: static loads from a provisional model on stiff supports.
         stiff = [fe.Support(f"Bearing {i + 1}", z, fe.constant_support(kxx=1e9, kyy=1e9)) for i, z in enumerate(rotor["bearing_z_m"])]
         prov = fe_model(rotor, shaft_mat, stiff)
         loads = prov.static_bearing_loads()
+        bcases = None
         if project.bearings.journal_type == "user" and project.bearings.user_coefficients:
             uc = project.bearings.user_coefficients.model_dump()
             supports = [fe.Support(f"Bearing {i + 1}", z, fe.constant_support(**uc)) for i, z in enumerate(rotor["bearing_z_m"])]
@@ -146,6 +149,7 @@ def run_project(project, level: str = "full") -> dict:
             jb = {label: (size_journal(W, rotor["journal_diameter_m"], project.bearings), max(W, 100.0)) for label, W in loads.items()}
             tables = bearing_tables(jb, speeds_rad, project.bearings)
             supports = _supports_from_tables(tables, rotor, speeds_rad)
+            bcases = bearing_cases(jb, speeds_rad, project.bearings) if level == "full" else None
             bd = project.bearings
             rated = {label: bearing_performance(b, W, omega * db.max_continuous_speed_pct / 100, bd.oil_grade,
                                                 bd.oil_supply_temperature_c, bd.oil_temperature_rise_c)
@@ -154,7 +158,8 @@ def run_project(project, level: str = "full") -> dict:
         static = fe.static_deflection(model, omega)
         shaft = shaft_integrity(model, rotor, shaft_mat, project, [s["power_kw"] * 1e3 for s in stages], omega, static)
         seals = seal_analysis(gas, sub, imps["impellers"], project, rotor)
-        lateral = lateral_analysis(model, rotor, sizing, project, seals["total_wachel_q_n_m"]) if level == "full" else \
+        lateral = lateral_analysis(model, rotor, sizing, project, seals["total_wachel_q_n_m"], bcases, stages, imps["impellers"], seals) \
+            if level == "full" else \
             _lateral_fast(model, rotor, sizing, project, seals["total_wachel_q_n_m"])
         stress = impeller_stress(imps["impellers"], stages, imp_mat, lateral["speeds"], project.criteria)
         fea = impeller_fea(imps["impellers"], stages, imp_mat, lateral["speeds"], project.criteria) if level == "full" else None
