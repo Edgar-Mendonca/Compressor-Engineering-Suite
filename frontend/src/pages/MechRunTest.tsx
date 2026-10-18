@@ -3,15 +3,17 @@ import { fmt, type Json } from "../api";
 import { LiveChart } from "../components/LiveChart";
 import { Plot, SERIES } from "../components/Plot";
 import { safeName, saveFrom, toast } from "../files";
+import { Summary, svgToPng, TagsPanel, useTags } from "../components/testTags";
 
 // Mechanical running test (API 617 9th ed. 8.3.2 / 8.3.3), backend testing/mrt.py: test train,
 // speed-time plan with the lube-oil sequences, predicted probe response along the plan, acceptance,
 // unbalanced rotor response test, test log evaluation, assembled gas leak test and the PDF report.
 
 type Ctx = { project: Json; results: Json; casing: number; setProject: (p: Json) => void };
-const TABS = ["Test train", "Speed-time plan", "Predicted response", "Acceptance", "URT", "Test log", "Gas leak test", "Report"];
+const TABS = ["Test train", "Speed-time plan", "Predicted response", "Acceptance", "URT", "Test log", "Gas leak test", "Tags & glossary", "Report"];
 const PROBES = ["V1-X", "V1-Y", "V2-X", "V2-Y"];
-const LOGCOLS = ["time", "N1", ...PROBES, "V5-Z", "V6-Z", ...Array.from({ length: 12 }, (_, i) => `TA${i + 1}`), "TD1", "TD2", "T_oil", "P_oil", "seq"];
+const LOGCOLS = ["time", "N1", ...PROBES, "V5-Z", "V6-Z", ...Array.from({ length: 12 }, (_, i) => `TA${i + 1}`), "TD1", "TD2", "T_oil", "P_oil", "SG_DE", "SG_NDE", "seq"];
+type TFn = (k: string) => string;
 const PHASE_COL: Record<string, string> = { startup: "#7F7F7F", warmup: "#E69F00", critical: "#C0392B", step: "#0B5CAD", trip: "#CC79A7",
   runout: "#56B4E9", run4h: "#009E73", coastdown: "#5b6878" };
 const MULS = [1, 10, 60, 120, 300, 600];
@@ -82,11 +84,12 @@ function Tacho({ n, max, marks, crit, trip }: { n: number; max: number; marks: [
   );
 }
 
-function TrainAnim({ d }: { d: Json }) {
+function TrainAnim({ d, T, still, svgRef }: { d: Json; T: TFn; still?: boolean; svgRef?: (e: SVGSVGElement | null) => void }) {
   const plan = d.plan, al = d.along, sp = d.speeds, tr = d.train, lim = d.limit_um;
   const crit: number[] = d.prediction.critical_speeds.filter((c: Json) => !(c.af < 2.5)).map((c: Json) => c.speed_rpm);
   const dur: number = plan.duration_min;
-  const t = useRef(0), phi = useRef(0), phiD = useRef(0), flow = useRef(0), last = useRef(0);
+  const t0 = still ? (plan.segments.find((q: Json) => q.phase === "run4h" && q.n0_rpm === q.n1_rpm)?.t0_min ?? 0) + 20 : 0;
+  const t = useRef(t0), phi = useRef(0.13), phiD = useRef(0.07), flow = useRef(0), last = useRef(0);
   const [mul, setMul] = useState(120);
   const [playing, setPlaying] = useState(false);
   const [, setFrame] = useState(0);
@@ -121,6 +124,11 @@ function TrainAnim({ d }: { d: Json }) {
   const geared = tr.geared, ratio = tr.gear_ratio;
   const comps: Json[] = tr.components;
   const casings = comps.filter((c) => c.kind === "casing");
+  const fr = Math.max(0, Math.min(n / sp.mcs_rpm, 1.2));
+  const rise: number[] = Object.values(d.prediction.bearing_oil ?? {}).map((b: Json) => b.temp_rise_k ?? 15);
+  const drain = [oilT + (rise[0] ?? 15) * fr ** 1.5, oilT + (rise[1] ?? rise[0] ?? 15) * fr ** 1.5];
+  const axial = n > 50 ? 110 + 45 * fr + 4 * Math.sin(now * 3) : 0;
+  const sgv = [0.35 + 0.9 * fr, 0.32 + 0.85 * fr], sgp = 3 + 2 * fr;
 
   // Layout along x.
   const Y = geared ? 172 : 196, YD = 196, base = 292;
@@ -131,7 +139,9 @@ function TrainAnim({ d }: { d: Json }) {
   place("motor", 230, 0); place("lsc", 64, 0);
   if (geared) { place("gear", 150, 0); place("hsc", 64, 0); }
   casings.forEach((_, i) => { place(`cas${i}`, 270, 0); if (i < casings.length - 1) place(`ic${i}`, 56, 0); });
-  const W = x + 64;
+  const trainEnd = x;
+  place("dgs", 150, 0);
+  const W = x + 30;
   const stripes = (id: string, p: number) => <pattern id={id} width="10" height="40" patternUnits="userSpaceOnUse" patternTransform={`translate(0 ${(p * 4 * 10) % 40})`}>
     <rect width="10" height="40" fill="none" /><path d="M0 0 L10 10 M0 20 L10 30" stroke="#1d2733" strokeWidth="3" /></pattern>;
   const fins = (x0: number, w: number, y0: number, h: number) => Array.from({ length: Math.floor(w / 8) }, (_, i) => <line key={i} x1={x0 + 4 + i * 8} x2={x0 + 4 + i * 8} y1={y0} y2={y0 + h} stroke="#0a3d73" strokeWidth="2.2" opacity=".8" />);
@@ -143,9 +153,9 @@ function TrainAnim({ d }: { d: Json }) {
       <circle cx={px} cy={py} r="4.5" fill={col} stroke="#1d2733" className={r > 0.85 ? "blink" : ""} /></g>;
   };
   const tag = (x0: number, y0: number, lines: [string, string, string][]) => <g transform={`translate(${x0} ${y0})`}>
-    <rect width="104" height={6 + lines.length * 13} rx="2" fill="var(--panel)" stroke="var(--line-2)" opacity=".96" />
+    <rect width="146" height={6 + lines.length * 13} rx="2" fill="var(--panel)" stroke="var(--line-2)" opacity=".96" />
     {lines.map(([k, v, c], i) => <g key={k}><circle cx="8" cy={11 + i * 13} r="3" fill={c} /><text x="15" y={14 + i * 13} className="mrt-tag">{k}</text>
-      <text x="98" y={14 + i * 13} className="mrt-tag" textAnchor="end">{v}</text></g>)}</g>;
+      <text x="140" y={14 + i * 13} className="mrt-tag" textAnchor="end">{v}</text></g>)}</g>;
   const housing = (cx: number, y: number, label: string, p: string) => <g>
     <Box x={cx - 20} y={y - 30} w={40} h={58} c={["#a9b6c4", "#8996a6", "#6c7889"]} d={8} />
     {probe(cx, y - 26, `${p}-X`, 1)}{probe(cx, y - 26, `${p}-Y`, -1)}
@@ -164,14 +174,8 @@ function TrainAnim({ d }: { d: Json }) {
   }, [plan]);
   const MX = (tt: number) => 8 + (tt / dur) * 344, MY = (v: number) => 88 - (v / (sp.trip_rpm * 1.08)) * 80;
 
-  return (
-    <div className="mrt-anim">
-      <div className="mrt-stage-wrap">
-        <div className={`mrt-banner ${nearCrit ? "crit" : ""}`} style={{ borderLeftColor: PHASE_COL[seg?.phase] }}>
-          <b>{seg?.seq ? `4 h run · ${seg.seq}` : seg?.label}</b>
-          <span className="mono small">{nearCrit ? `Passing critical ${Math.round(nearCrit)} rpm, keep accelerating` : seg?.critical ? "Critical-speed pass in this phase" : `${hhmm(now)} / ${hhmm(dur)}`}</span>
-        </div>
-        <svg viewBox={`0 0 ${W} 400`} className={`mrt-stage ${bodyC}`} role="img" aria-label="Mechanical running test train">
+  const stage = (
+        <svg ref={svgRef} viewBox={`0 0 ${W} 412`} className={`mrt-stage ${bodyC}`} role="img" aria-label="Mechanical running test train">
           <defs>
             {[["gSteel", "#e3e8ee", "#8e9aa8", "#58636f"], ["gMotor", "#5f97d6", "#1a5aa6", "#0d3a6e"], ["gCas", "#a7c0cf", "#5e8197", "#34505f"],
               ["gHead", "#93a7b8", "#5a6d7e", "#38464f"], ["gGuard", "#ffd27a", "#e69f00", "#a86d00"], ["gGear", "#9aa6b3", "#6b7785", "#4a5562"],
@@ -181,10 +185,10 @@ function TrainAnim({ d }: { d: Json }) {
             <radialGradient id="gShadow"><stop offset="0" stopColor="#000" stopOpacity=".25" /><stop offset="1" stopColor="#000" stopOpacity="0" /></radialGradient>
             <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0 H0 V40" fill="none" stroke="var(--line)" strokeWidth=".6" /></pattern>
           </defs>
-          <rect width={W} height="400" fill="url(#grid)" />
+          <rect width={W} height="412" fill="url(#grid)" />
           {/* baseplate */}
           <ellipse cx={W / 2} cy={base + 30} rx={W / 2} ry="16" fill="url(#gShadow)" />
-          <Box x={at.motor[0] - 10} y={base} w={x - at.motor[0] - 8} h={20} c={["#9aa3ad", "#6f7883", "#4d555e"]} d={16} />
+          <Box x={at.motor[0] - 10} y={base} w={trainEnd - at.motor[0] + 4} h={20} c={["#9aa3ad", "#6f7883", "#4d555e"]} d={16} />
           {comps.some((c) => c.kind === "vfd") && <g>
             <Box x={at.vfd[0]} y={92} w={at.vfd[1]} h={220} c={["#7f8b99", "#48525f", "#323a44"]} d={14}>
               <rect x={at.vfd[0] + 8} y={102} width={at.vfd[1] / 2 - 10} height={200} fill="none" stroke="#2a313a" />
@@ -239,15 +243,21 @@ function TrainAnim({ d }: { d: Json }) {
             <Cyl x={cx + 66} y={Y} w={cw - 132} h={116} g="gCas" rx={10} />
             {Array.from({ length: 7 }, (_, k) => <circle key={k} cx={cx + 57} cy={Y - 54 + k * 18} r="2.2" fill="#2b3542" />)}
             {Array.from({ length: 7 }, (_, k) => <circle key={k} cx={cx + cw - 57} cy={Y - 54 + k * 18} r="2.2" fill="#2b3542" />)}
-            {[[cx + 96, "SUCTION"], [cx + cw - 124, "DISCHARGE"]].map(([nx, l]) => <g key={l as string}>
+            {[[cx + 96, "SUCTION"], [cx + cw - 124, "DISCH."]].map(([nx, l]) => <g key={l as string}>
               <rect x={(nx as number)} y={Y - 106} width={28} height={50} fill="url(#gCas)" stroke="#1d2733" />
               <rect x={(nx as number) - 8} y={Y - 114} width={44} height={10} fill="url(#gHead)" stroke="#1d2733" />
               <text x={(nx as number) + 14} y={Y - 120} textAnchor="middle" className="mrt-lab">{l}</text></g>)}
             <text x={cx + cw / 2} y={Y + 5} textAnchor="middle" className="mrt-name">CASING {i + 1}</text>
-            {housing(b1, Y, "1R1", "V1")}{housing(b2, Y, "1R2", "V2")}
+            {housing(b1, Y, "DE journal", "V1")}{housing(b2, Y, "NDE journal + thrust", "V2")}
+            {/* keyphasor at the DE shaft and axial probes A / B on the thrust collar */}
+            <g><line x1={b1 + 34} y1={Y + 36} x2={b1 + 34} y2={Y + 9} stroke="#2b3542" strokeWidth="4" /><polygon points={`${b1 + 30},${Y + 8} ${b1 + 38},${Y + 8} ${b1 + 34},${Y + 3}`} fill="#e0a020" />
+              <text x={b1 + 34} y={Y + 48} textAnchor="middle" className="mrt-lab">{T("KPH")}</text></g>
+            {[0, 1].map((j) => <g key={j}><line x1={cx + cw - 6 + 14} y1={Y - 12 + j * 24} x2={cx + cw - 6 + 2} y2={Y - 4 + j * 8} stroke="#2b3542" strokeWidth="3.5" />
+              <circle cx={cx + cw - 6 + 15} cy={Y - 13 + j * 26} r="4" fill={level(axial / 500)} stroke="#1d2733" />
+              <text x={cx + cw + 14} y={Y - 18 + j * 40} className="mrt-lab">{T(j ? "V6-Z" : "V5-Z")}</text></g>)}
             <rect x={b2 + 16} y={Y - 6} width={10} height={12} fill="#2b3542" />
             <text x={cx + cw / 2} y={330} textAnchor="middle" className="mrt-lab">Casing {i + 1} ({casings[i].source}) · {fmt(n, 0)} rpm</text>
-            <text x={cx + cw / 2} y={343} textAnchor="middle" className="mrt-lab">1R1 drive end · 1R2 non-drive end + thrust · axial probes</text>
+            <text x={cx + cw / 2} y={343} textAnchor="middle" className="mrt-lab">X/Y probes 45° from TDC · axial at thrust collar</text>
           </g>; })}
           {/* oil console and piping */}
           <g>
@@ -260,16 +270,40 @@ function TrainAnim({ d }: { d: Json }) {
               <text x={120} y={366} textAnchor="middle" className="mrt-name small">LUBE OIL CONSOLE</text></Box>
             <Cyl x={210} y={360} w={46} h={22} g="gMotor" /><rect x={262} y={340} width={14} height={40} rx="6" fill="url(#gSteel)" stroke="#1d2733" />
             <rect x={282} y={340} width={14} height={40} rx="6" fill="url(#gSteel)" stroke="#1d2733" />
-            <text x={306} y={354} className="mrt-lab" textAnchor="start">{fmt(oilT, 1)} °C · {fmt(oilP, 2)} barg</text>
-            <text x={306} y={368} className="mrt-lab" textAnchor="start">supply → (blue) / drain ← (orange)</text>
+            <text x={306} y={354} className="mrt-lab" textAnchor="start">supply → (blue) / drain ← (orange)</text>
           </g>
+          {/* dry gas seal panel: seal gas to both seals, primary vents back to the panel */}
+          {casings.length > 0 && (() => { const [gx] = at.dgs, [cx, cw] = at[`cas${casings.length - 1}`], [c0] = at.cas0; return <g>
+            <Box x={gx + 6} y={120} w={104} h={150} c={["#a596cf", "#6c5a9c", "#4c3d78"]} d={12}>
+              <text x={gx + 58} y={140} textAnchor="middle" className="mrt-name small" fill="#fff">DGS PANEL</text>
+              {[0, 1, 2].map((j) => <g key={j}><circle cx={gx + 34 + j * 24} cy={168} r="9" fill="#ece8f6" stroke="#2b2350" /><line x1={gx + 34 + j * 24} y1={168} x2={gx + 34 + j * 24 + 6 * Math.cos(now * 2 + j)} y2={168 - 6 * Math.abs(Math.sin(now * 2 + j))} stroke="#c0392b" strokeWidth="1.5" /></g>)}
+              <rect x={gx + 18} y={190} width={80} height={8} rx="2" fill="#2b2350" /><rect x={gx + 18} y={206} width={80} height={8} rx="2" fill="#2b2350" /></Box>
+            {[[c0 + 40, "#e69f00"], [cx + cw - 40, "#e69f00"]].map(([xx, c], j) => <g key={j}>
+              <path d={`M${gx + 6} ${150 + j * 10} H${(xx as number) + (j ? 0 : 0)} V${Y - 58}`} className="oil" stroke={c as string} strokeWidth="2.6" strokeDashoffset={-flow.current * 0.8} fill="none" opacity=".85" />
+              <path d={`M${(xx as number) + 8} ${Y - 58} V${110 - j * 8} H${gx + 6}`} className="oil" stroke="#56b4e9" strokeWidth="2.2" strokeDashoffset={flow.current * 0.5} fill="none" opacity=".75" /></g>)}
+            <text x={gx + 58} y={284} textAnchor="middle" className="mrt-lab">seal gas → (orange)</text>
+            <text x={gx + 58} y={296} textAnchor="middle" className="mrt-lab">vents ← (blue)</text>
+          </g>; })()}
           {/* live tags */}
-          {casings.length > 0 && (() => { const [cx, cw] = at.cas0; return <>
-            {tag(cx - 118, 18, [["1R1X", `${fmt(vib["V1-X"], 1)} µm`, level(vib["V1-X"] / lim)], ["1R1Y", `${fmt(vib["V1-Y"], 1)} µm`, level(vib["V1-Y"] / lim)],
-              ["Brg 1", `${fmt(btemp[0]?.[1], 0)} °C`, tlevel(btemp[0]?.[1] ?? 0, d.bearing_temp_limit_c)]])}
-            {tag(cx + cw - 46, 18, [["1R2X", `${fmt(vib["V2-X"], 1)} µm`, level(vib["V2-X"] / lim)], ["1R2Y", `${fmt(vib["V2-Y"], 1)} µm`, level(vib["V2-Y"] / lim)],
-              ["Brg 2", `${fmt(btemp[1]?.[1], 0)} °C`, tlevel(btemp[1]?.[1] ?? 0, d.bearing_temp_limit_c)]])}</>; })()}
-        </svg>
+          {casings.length > 0 && (() => { const [cx, cw] = at.cas0, [gx] = at.dgs; return <>
+            {tag(cx - 150, 18, [[T("V1-X"), `${fmt(vib["V1-X"], 1)} µm`, level(vib["V1-X"] / lim)], [T("V1-Y"), `${fmt(vib["V1-Y"], 1)} µm`, level(vib["V1-Y"] / lim)],
+              [T("Bearing 1"), `${fmt(btemp[0]?.[1], 0)} °C`, tlevel(btemp[0]?.[1] ?? 0, d.bearing_temp_limit_c)], [T("TD1"), `${fmt(n > 50 ? drain[0] : oilT, 1)} °C`, "#3d8fd6"]])}
+            {tag(cx + cw - 100, 18, [[T("V2-X"), `${fmt(vib["V2-X"], 1)} µm`, level(vib["V2-X"] / lim)], [T("V2-Y"), `${fmt(vib["V2-Y"], 1)} µm`, level(vib["V2-Y"] / lim)],
+              [T("Bearing 2"), `${fmt(btemp[1]?.[1], 0)} °C`, tlevel(btemp[1]?.[1] ?? 0, d.bearing_temp_limit_c)], [T("Thrust (active)"), `${fmt(btemp[2]?.[1], 0)} °C`, tlevel(btemp[2]?.[1] ?? 0, d.bearing_temp_limit_c)],
+              [T("V5-Z"), `${fmt(axial, 0)} µm`, level(axial / 500)]])}
+            {tag(gx - 14, 310, [[T("SG_DE"), `${fmt(n > 50 ? sgv[0] : 0.2, 2)} Nm³/h`, "#56b4e9"], [T("SG_NDE"), `${fmt(n > 50 ? sgv[1] : 0.2, 2)} Nm³/h`, "#56b4e9"], [T("SG_P"), `${fmt(sgp, 1)} barg`, "#e69f00"]])}
+            {tag(300, 364, [[T("T_oil"), `${fmt(oilT, 1)} °C`, "#3d8fd6"], [T("P_oil"), `${fmt(oilP, 2)} barg`, "#3d8fd6"]])}
+            {tag(cx + cw / 2 - 73, 352, [[T("N1"), `${fmt(n, 0)} rpm`, "var(--accent)"]])}</>; })()}
+        </svg>);
+  if (still) return stage;
+  return (
+    <div className="mrt-anim">
+      <div className="mrt-stage-wrap">
+        <div className={`mrt-banner ${nearCrit ? "crit" : ""}`} style={{ borderLeftColor: PHASE_COL[seg?.phase] }}>
+          <b>{seg?.seq ? `4 h run · ${seg.seq}` : seg?.label}</b>
+          <span className="mono small">{nearCrit ? `Passing critical ${Math.round(nearCrit)} rpm, keep accelerating` : seg?.critical ? "Critical-speed pass in this phase" : `${hhmm(now)} / ${hhmm(dur)}`}</span>
+        </div>
+        {stage}
         <div className="mrt-controls">
           <button className="btn primary" onClick={() => { if (t.current >= dur) t.current = 0; setPlaying(!playing); }}>{playing ? "Pause" : now > 0 && now < dur ? "Resume" : "Play test"}</button>
           <button className="btn" onClick={() => { t.current = 0; setPlaying(false); setFrame((k) => k + 1); }}>Reset</button>
@@ -277,15 +311,15 @@ function TrainAnim({ d }: { d: Json }) {
           <input type="range" className="mrt-scrub" min={0} max={dur} step={0.25} value={now} onChange={(e) => { t.current = Number(e.target.value); setFrame((k) => k + 1); }} aria-label="Test time" />
           <span className="mono small">{hhmm(now)} of {hhmm(dur)} h:min</span>
         </div>
-        <LivePanel d={d} now={now} n={n} vib={vib} />
+        <LivePanel d={d} now={now} n={n} vib={vib} T={T} />
       </div>
       <aside className="mrt-side">
         <Tacho n={n} max={Math.ceil((sp.trip_rpm * 1.12) / 1000) * 1000} trip={sp.trip_rpm} crit={crit}
           marks={[["MSS", sp.min_rpm], ["MCS", sp.mcs_rpm], ["TRIP", sp.trip_rpm]]} />
         <div className="mrt-bars">
-          {PROBES.map((k) => { const r = vib[k] / lim; return <div key={k} className="mrt-bar"><span className="mono">{TAGN[k]}</span>
+          {PROBES.map((k) => { const r = vib[k] / lim; return <div key={k} className="mrt-bar"><span className="mono">{T(k)}</span>
             <div><i style={{ width: `${Math.min(r, 1.2) / 1.2 * 100}%`, background: level(r) }} /><b style={{ left: `${100 / 1.2}%` }} /></div><span className="mono">{fmt(vib[k], 1)}</span></div>; })}
-          {btemp.map(([k, v]) => { const r = v / d.bearing_temp_limit_c; return <div key={k} className="mrt-bar"><span className="mono">{k.replace("Bearing ", "Brg ").replace(" (active)", "")}</span>
+          {btemp.map(([k, v]) => { const r = v / d.bearing_temp_limit_c; return <div key={k} className="mrt-bar"><span className="mono">{T(k)}</span>
             <div><i style={{ width: `${Math.min(r, 1.2) / 1.2 * 100}%`, background: tlevel(v, d.bearing_temp_limit_c) }} /><b style={{ left: `${100 / 1.2}%` }} /></div><span className="mono">{fmt(v, 0)} °C</span></div>; })}
           <div className="muted small">Limit lines: {fmt(lim, 1)} µm pk-pk, {fmt(d.bearing_temp_limit_c, 0)} °C. Predicted values at the current speed.</div>
         </div>
@@ -294,7 +328,7 @@ function TrainAnim({ d }: { d: Json }) {
             <circle r="30" fill="none" stroke="#d6453a" strokeDasharray="3 3" /><line x1="-46" x2="46" stroke="var(--line)" /><line y1="-46" y2="46" stroke="var(--line)" />
             <ellipse rx={30 * ax + 0.5} ry={30 * ay + 0.5} fill="none" stroke="var(--accent)" strokeWidth="2" transform="rotate(-30)" />
             <circle cx={(30 * ax) * Math.cos(a) * Math.cos(-0.52) - (30 * ay) * Math.sin(a) * Math.sin(-0.52)} cy={(30 * ax) * Math.cos(a) * Math.sin(-0.52) + (30 * ay) * Math.sin(a) * Math.cos(-0.52)} r="3.5" fill="#d6453a" />
-            <text x="-46" y="-40" fontSize="9" fill="var(--muted)">{b === "V1" ? "1R1" : "1R2"} orbit</text><text x="46" y="46" fontSize="7" textAnchor="end" fill="#d6453a">dashed = limit</text></svg>; })}</div>
+            <text x="-46" y="-40" fontSize="9" fill="var(--muted)">{b === "V1" ? "DE" : "NDE"} orbit</text><text x="46" y="46" fontSize="7" textAnchor="end" fill="#d6453a">dashed = limit</text></svg>; })}</div>
         <svg viewBox="0 0 360 112" className="mrt-mini" role="img" aria-label="Speed-time plan">
           {plan.segments.map((s: Json, i: number) => <rect key={i} x={MX(s.t0_min)} y={96} width={Math.max(MX(s.t1_min) - MX(s.t0_min), 0.5)} height={8} fill={PHASE_COL[s.phase]} opacity={s === seg ? 1 : 0.55} />)}
           {crit.map((c) => <g key={c}><line x1={8} x2={352} y1={MY(c)} y2={MY(c)} stroke="#d6453a" strokeDasharray="3 3" /><text x={350} y={MY(c) - 2} fontSize="7" textAnchor="end" fill="#d6453a">Nc {Math.round(c)}</text></g>)}
@@ -310,10 +344,9 @@ function TrainAnim({ d }: { d: Json }) {
 }
 
 // ---------------------------------------------------------------- live charts under the train
-export const TAGN: Record<string, string> = { "V1-X": "1R1X", "V1-Y": "1R1Y", "V2-X": "1R2X", "V2-Y": "1R2Y" };
 const PCOL: Record<string, string> = { "V1-X": "#0b5cad", "V1-Y": "#7b3fb5", "V2-X": "#2e9e6b", "V2-Y": "#d1782a" };
 
-function LivePanel({ d, now, n, vib }: { d: Json; now: number; n: number; vib: Record<string, number> }) {
+function LivePanel({ d, now, n, vib, T }: { d: Json; now: number; n: number; vib: Record<string, number>; T: TFn }) {
   const al = d.along, pr = d.prediction, sp = d.speeds, lim = d.limit_um;
   const [probe, setProbe] = useState("V1-X");
   const i = Math.max(bisect(al.t_min, now), 1);
@@ -324,18 +357,18 @@ function LivePanel({ d, now, n, vib }: { d: Json; now: number; n: number; vib: R
   return (
     <div className="mrt-live">
       <div className="mrt-live-head"><b>Live test charts</b>
-        <div className="seg">{PROBES.map((k) => <button key={k} className={probe === k ? "on" : ""} onClick={() => setProbe(k)}>{TAGN[k]}</button>)}</div></div>
+        <div className="seg">{PROBES.map((k) => <button key={k} className={probe === k ? "on" : ""} onClick={() => setProbe(k)}>{T(k)}</button>)}</div></div>
       <LiveChart title="Trend · shaft vibration (µm pk-pk) and speed" xl="Time (h)" yl="µm pk-pk" yr="rpm" h={200}
         xr={[0, d.plan.duration_min / 60]} yrange={[0, lim * 1.1]} y2range={[0, sp.trip_rpm * 1.08]} cursor={now / 60}
         hlines={[{ y: lim, color: "#c0392b", label: `limit ${fmt(lim, 1)}` }]}
-        series={[...PROBES.map((k) => ({ x: th, y: al[k].slice(0, i + 1), color: PCOL[k], name: TAGN[k], width: 1.4 })),
+        series={[...PROBES.map((k) => ({ x: th, y: al[k].slice(0, i + 1), color: PCOL[k], name: T(k), width: 1.4 })),
           { x: th, y: al.speed_rpm.slice(0, i + 1), color: "#8e9aa5", right: true, fill: true, width: 1.2, name: "speed" }]} />
       <div className="mrt-live-row">
-        <LiveChart title={`Bode · ${TAGN[probe]} 1X amplitude`} xl="Speed (rpm)" yl="µm pk-pk" h={180} xr={[0, sp.trip_rpm * 1.04]}
+        <LiveChart title={`Bode · ${T(probe)} 1X amplitude`} xl="Speed (rpm)" yl="µm pk-pk" h={180} xr={[0, sp.trip_rpm * 1.04]}
           vlines={crit.slice(0, 2).map((c) => ({ x: c, color: "#c0392b", label: `Nc ${Math.round(c)}` }))}
           series={[{ x: pr.speeds_rpm, y: pr.probes[probe].amp_1x_um, color: PCOL[probe], fill: true, width: 1.6 }]}
           markers={n > 50 ? [{ x: n, y: lerp(pr.speeds_rpm, pr.probes[probe].amp_1x_um, n), color: "#c0392b", label: `${Math.round(n)} rpm` }] : []} legend={false} />
-        <LiveChart title={`Spectrum · ${TAGN[probe]} at ${Math.round(n)} rpm`} xl="Frequency (Hz)" yl="µm" h={180} xr={[0, fm]}
+        <LiveChart title={`Spectrum · ${T(probe)} at ${Math.round(n)} rpm`} xl="Frequency (Hz)" yl="µm" h={180} xr={[0, fm]}
           yrange={[0, Math.max(lim * 0.5, a1 * 1.25, 1)]} bars={comp.map(([o, a, l]) => ({ x: o * f1, y: a, color: l === "1X" ? PCOL[probe] : "#8e9aa5", label: l }))}
           series={[]} legend={false} />
       </div>
@@ -382,6 +415,8 @@ export function MechRunTestPage(c: Ctx) {
   const setLeak = (v: Json) => { mem.leak = v; setLeakS(v); };
   const setOpt = (v: Json) => { mem.options = v; setOptS(v); };
   const fileRef = useRef<HTMLInputElement>(null);
+  const capRef = useRef<SVGSVGElement | null>(null);
+  const { T } = useTags(c.project);
 
   const body = (o: Json = opt) => ({
     project: c.project, casing: c.casing, options: o,
@@ -409,38 +444,46 @@ export function MechRunTestPage(c: Ctx) {
         name: `Critical ${i + 1} (AF ${fmt(q.af, 1)})`, mode: "lines", line: { dash: "dash", color: SERIES[1 + i] } })),
         { x: [0, h[h.length - 1]], y: [d.speeds.mcs_rpm, d.speeds.mcs_rpm], name: "MCS", mode: "lines", line: { dash: "dot", color: SERIES[2] } }],
       oil: [{ x: h, y: d.plan.oil_t_c, name: "Oil supply T (°C)", mode: "lines" }, { x: h, y: d.plan.oil_p_barg, name: "Oil supply P (barg)", mode: "lines", yaxis: "y2" }],
-      amp: [...PROBES.map((k) => ({ x: s, y: pr.probes[k].unfiltered_um, name: `${k} unfiltered`, mode: "lines" })),
-        ...PROBES.slice(0, 1).map((k) => ({ x: s, y: pr.probes[k].amp_1x_um, name: `${k} 1X`, mode: "lines", line: { dash: "dot" } })), lim],
-      phase: PROBES.map((k) => ({ x: s, y: pr.probes[k].phase_deg, name: k, mode: "lines" })),
+      amp: [...PROBES.map((k) => ({ x: s, y: pr.probes[k].unfiltered_um, name: `${T(k)} unfiltered`, mode: "lines" })),
+        ...PROBES.slice(0, 1).flatMap((k) => [{ x: s, y: pr.probes[k].amp_1x_um, name: `${T(k)} 1X compensated`, mode: "lines", line: { dash: "dot" } },
+          { x: s, y: pr.probes[k].uncomp_1x_um, name: `${T(k)} 1X uncompensated`, mode: "lines", line: { dash: "dash" } }]), lim],
+      phase: PROBES.map((k) => ({ x: s, y: pr.probes[k].phase_deg, name: T(k), mode: "lines" })),
       polar: ["V1-X", "V2-X"].map((k) => ({ x: pr.probes[k].amp_1x_um.map((a: number, i: number) => a * Math.cos((pr.probes[k].phase_deg[i] * Math.PI) / 180)),
-        y: pr.probes[k].amp_1x_um.map((a: number, i: number) => a * Math.sin((pr.probes[k].phase_deg[i] * Math.PI) / 180)), name: `${k} 1X`, mode: "lines" })),
+        y: pr.probes[k].amp_1x_um.map((a: number, i: number) => a * Math.sin((pr.probes[k].phase_deg[i] * Math.PI) / 180)), name: `${T(k)} 1X`, mode: "lines" })),
+      orbit: Object.entries(pr.orbits ?? {}).map(([k, v]: [string, Json]) => ({ x: v.x_um, y: v.y_um, name: `${k.replace("V1", "DE").replace("V2", "NDE")} ${fmt(v.speed_rpm, 0)} rpm`, mode: "lines" })),
       cl: Object.entries(pr.centreline).flatMap(([k, v]: [string, Json], i) => [{ x: v.x_um, y: v.y_um, name: k, mode: "lines+markers" },
         { x: Array.from({ length: 73 }, (_, j) => v.clearance_um * Math.cos((j * 5 * Math.PI) / 180)), y: Array.from({ length: 73 }, (_, j) => v.clearance_um * Math.sin((j * 5 * Math.PI) / 180)),
           name: `${k} clearance`, mode: "lines", line: { dash: "dash", color: SERIES[6 + (i % 2)] } }]),
       temp: Object.entries(pr.bearing_temp_table).map(([k, v]: [string, Json]) => ({ x: v.speeds_rpm, y: v.temp_c, name: k, mode: "lines+markers" })),
-      urt: [...PROBES.map((k) => ({ x: d.urt.speeds_rpm, y: d.urt.response[k].amp_um, name: `${k} with trial`, mode: "lines" })),
-        ...PROBES.map((k) => ({ x: [d.speeds.mcs_rpm, d.speeds.mcs_rpm], y: [d.urt.predicted_range_um[k].mcs[0], d.urt.predicted_range_um[k].mcs[2]], name: `${k} range at MCS`, mode: "lines+markers", showlegend: false }))],
+      urt: [...PROBES.map((k) => ({ x: d.urt.speeds_rpm, y: d.urt.response[k].amp_um, name: `${T(k)} with trial`, mode: "lines" })),
+        ...PROBES.map((k) => ({ x: [d.speeds.mcs_rpm, d.speeds.mcs_rpm], y: [d.urt.predicted_range_um[k].mcs[0], d.urt.predicted_range_um[k].mcs[2]], name: `${T(k)} range at MCS`, mode: "lines+markers", showlegend: false }))],
     };
-  }, [d, pr]);
-  const logPlot = useMemo(() => d?.log ? [...PROBES.map((k) => ({ x: d.log.rows.map((r: Json) => r.t_min), y: d.log.rows.map((r: Json) => r.vib[k] ?? null), name: `${k} measured`, mode: "lines+markers" })),
-    { x: d.log.rows.map((r: Json) => r.t_min), y: d.log.rows.map((r: Json) => r.predicted["V1-X"]), name: "V1-X predicted", mode: "lines", line: { dash: "dash" } },
-    { x: [d.log.rows[0]?.t_min ?? 0, d.log.rows[d.log.rows.length - 1]?.t_min ?? 1], y: [d.limit_um, d.limit_um], name: "Limit", mode: "lines", line: { dash: "dash", color: "#C0392B" } }] : null, [d]);
+  }, [d, pr, T]);
+  const logPlot = useMemo(() => d?.log ? [...PROBES.map((k) => ({ x: d.log.rows.map((r: Json) => r.t_min), y: d.log.rows.map((r: Json) => r.vib[k] ?? null), name: `${T(k)} measured`, mode: "lines+markers" })),
+    { x: d.log.rows.map((r: Json) => r.t_min), y: d.log.rows.map((r: Json) => r.predicted["V1-X"]), name: `${T("V1-X")} predicted`, mode: "lines", line: { dash: "dash" } },
+    { x: [d.log.rows[0]?.t_min ?? 0, d.log.rows[d.log.rows.length - 1]?.t_min ?? 1], y: [d.limit_um, d.limit_um], name: "Limit", mode: "lines", line: { dash: "dash", color: "#C0392B" } }] : null, [d, T]);
 
   if (!c.results) return <><h2>Mechanical running test</h2><p className="muted">Run the analysis first.</p></>;
   const exampleLog = () => {
     if (!d) return;
     const mcs = d.speeds.mcs_rpm, at = (k: string) => d.along[k][d.along[k].length - 10] ?? 5;
-    const seqs = ["nor", "nor", "Seq 1", "Seq 2", "Seq 3", "Seq 4", "Seq 5", "nor", "nor"];
+    // 4 h at MCS, one row every 15 min: 60 min stabilisation, the five 30 min oil sequences, final readings
+    const seqs = ["nor", "nor", "nor", "nor", "Seq 1", "Seq 1", "Seq 2", "Seq 2", "Seq 3", "Seq 3", "Seq 4", "Seq 4", "Seq 5", "Seq 5", "nor", "nor", "nor"];
     setLog(seqs.map((s, i) => { const o = d.oil, ot = s === "Seq 1" || s === "Seq 2" ? o.t.max : s === "Seq 4" || s === "Seq 5" ? o.t.min : o.t.nor;
       const op = s === "Seq 1" || s === "Seq 4" ? o.p.min : s === "Seq 2" || s === "Seq 5" ? o.p.max : o.p.nor;
-      const row: Json = { time: hhmm(i * 30), N1: Math.round(mcs), seq: s, T_oil: fmt(ot, 1), P_oil: fmt(op, 2), "V5-Z": 120 + 6 * i, "V6-Z": 118 + 6 * i };
+      const row: Json = { time: hhmm(i * 15), N1: Math.round(mcs), seq: s, T_oil: fmt(ot, 1), P_oil: fmt(op, 2), "V5-Z": 120 + 3 * i, "V6-Z": 118 + 3 * i,
+        SG_DE: (1.2 + 0.05 * Math.sin(i)).toFixed(2), SG_NDE: (1.1 + 0.05 * Math.cos(i)).toFixed(2) };
       PROBES.forEach((k, j) => { row[k] = (at(k) * (1 + 0.06 * Math.sin(i + j))).toFixed(1); });
       for (let j = 1; j <= 12; j++) row[`TA${j}`] = (((d.along[j <= 3 ? "Bearing 1" : j <= 6 ? "Bearing 2" : "Thrust (active)"] ?? [80]).slice(-10)[0] - (j > 9 ? 12 : 0)) + (ot - o.t.nor) + 0.5 * Math.sin(i * j)).toFixed(1);
-      row.TD1 = (ot + 14).toFixed(1); row.TD2 = (ot + 16).toFixed(1); return row; }));
+      const rise: number[] = Object.values(d.prediction.bearing_oil ?? {}).map((b: Json) => b.temp_rise_k ?? 15);
+      row.TD1 = (ot + (rise[0] ?? 14)).toFixed(1); row.TD2 = (ot + (rise[1] ?? 16)).toFixed(1); return row; }));
   };
-  const importCSV = async (f: File) => { const rows = parseCSV(await f.text()); if (!rows.length) { toast({ text: "No rows in the CSV", error: true }); return; } setLog(rows); toast({ text: `Imported ${rows.length} log rows` }); };
+  const importCSV = async (f: File) => { const byTag = Object.fromEntries(LOGCOLS.map((k) => [T(k), k]));
+    const rows = parseCSV(await f.text()).map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [byTag[k] ?? k, v]))); if (!rows.length) { toast({ text: "No rows in the CSV", error: true }); return; } setLog(rows); toast({ text: `Imported ${rows.length} log rows` }); };
   const exportCSV = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([toCSV(log, LOGCOLS)], { type: "text/csv" })); a.download = `${safeName(key)}_MRT_log.csv`; a.click(); };
   const acc = d?.acceptance ?? [];
+  const report = async () => saveFrom("/api/mrt/report.pdf", { ...body(), images: { setup: await svgToPng(capRef.current) } }, `${safeName(key)}_MRT.pdf`);
+  const setO = (patch: Json) => setOpt({ ...opt, ...patch });
 
   return (
     <>
@@ -453,11 +496,13 @@ export function MechRunTestPage(c: Ctx) {
         ["Vibration limit", `${fmt(d.limit_um, 1)} µm pk-pk`], ["1st critical (predicted)", pr.critical_speeds[0] ? `${fmt(pr.critical_speeds[0].speed_rpm, 0)} rpm` : "–"],
         ["Test duration", `${hhmm(d.plan.duration_min)} h`], ["URT nameplate", `"${d.urt.nameplate}"`], ["Overall", d.status]].map(([l, x]) =>
         <div className="kpi" key={l}><div className={`v ${String(x).length > 16 ? "long" : ""}`}>{l === "Overall" ? <Pill s={x} /> : x}</div><div className="l">{l}</div></div>)}</div>}
+      {d && <Summary rows={acc.map((a: Json) => [a.check, a.measured != null ? fmt(a.measured, 1) : a.predicted != null ? `${fmt(a.predicted, 1)} pred.` : "–", a.status])} />}
       <div className="seg" style={{ marginBottom: 14 }}>{TABS.map((t, i) => <button key={t} className={tab === i ? "on" : ""} onClick={() => setTab(i)}>{t}</button>)}</div>
       {busy && <p className="muted">Calculating…</p>}
+      {d && <div className="capture" aria-hidden="true"><TrainAnim d={d} T={T} still svgRef={(e) => { capRef.current = e; }} /></div>}
 
       {d && tab === 0 && <>
-        <div className="card"><h3>Test train · animated run of the speed-time plan</h3><TrainAnim key={`${d.plan.duration_min}-${d.train.components.length}`} d={d} /></div>
+        <div className="card"><h3>Test train · animated run of the speed-time plan</h3><TrainAnim key={`${d.plan.duration_min}-${d.train.components.length}`} d={d} T={T} /></div>
         <div className="grid" style={{ marginTop: 14 }}>
           <div className="card"><h3>Equipment checklist (shop / contract)</h3>
             <table className="t"><thead><tr><th>Item</th><th>Source</th><th>Note</th></tr></thead>
@@ -487,14 +532,16 @@ export function MechRunTestPage(c: Ctx) {
           <div className="card"><h3>Bode · amplitude</h3><Plot height={300} data={plots.amp} layout={{ xaxis: { title: "Speed (rpm)" }, yaxis: { title: "Amplitude (µm pk-pk)" } }} /></div>
           <div className="card"><h3>Bode · 1X phase</h3><Plot height={300} data={plots.phase} layout={{ xaxis: { title: "Speed (rpm)" }, yaxis: { title: "Phase lag (°)" } }} /></div>
           <div className="card"><h3>Polar (1X)</h3><Plot height={320} data={plots.polar} layout={{ xaxis: { title: "Real (µm)" }, yaxis: { title: "Imag (µm)" } }} /></div>
+          <div className="card"><h3>Orbits (1X) at MCS and trip</h3><Plot height={320} data={plots.orbit} layout={{ xaxis: { title: "X (µm)" }, yaxis: { title: "Y (µm)", scaleanchor: "x" } }} /></div>
           <div className="card"><h3>Shaft centreline in the bearing clearance</h3><Plot height={320} data={plots.cl} layout={{ xaxis: { title: "x (µm)" }, yaxis: { title: "y (µm)" } }} /></div>
           <div className="card"><h3>Waterfall at six speeds</h3><Waterfall wf={pr.waterfall} mcs={d.speeds.mcs_rpm} /></div>
           <div className="card"><h3>Bearing metal temperature (normal oil)</h3><Plot height={300} data={plots.temp} layout={{ xaxis: { title: "Speed (rpm)" }, yaxis: { title: "Babbitt (°C)" } }} /></div>
         </div>
         <div className="card" style={{ marginTop: 14 }}><h3>Predicted critical speeds</h3>
-          <table className="t"><thead><tr><th>Critical</th><th>Speed rpm</th><th>AF</th><th>Probe</th><th>Note</th></tr></thead>
-            <tbody>{pr.critical_speeds.map((q: Json, i: number) => <tr key={i}><td>{i + 1}</td><td className="n">{fmt(q.speed_rpm, 0)}</td><td className="n">{fmt(q.af, 2)}</td><td>{q.probe}</td>
-              <td className="muted">{q.af < 2.5 ? "critically damped (AF < 2.5)" : q.speed_rpm < d.speeds.min_rpm ? "pass quickly during run-up" : "inside the speed range: check separation"}</td></tr>)}</tbody></table></div></>}
+          <table className="t"><thead><tr><th>Critical</th><th>Speed rpm</th><th>AF</th><th>Position</th><th>SM actual %</th><th>SM required %</th><th>Status</th><th>Note</th></tr></thead>
+            <tbody>{pr.critical_speeds.map((q: Json, i: number) => <tr key={i}><td>{i + 1}</td><td className="n">{fmt(q.speed_rpm, 0)}</td><td className="n">{fmt(q.af, 2)}</td><td>{q.position}</td>
+              <td className="n">{fmt(q.sm_actual_pct, 1)}</td><td className="n">{q.af == null ? "AF not determinable" : q.sm_required_pct == null ? "none" : fmt(q.sm_required_pct, 1)}</td><td><Pill s={q.sm_status} /></td>
+              <td className="muted">{q.af == null ? "broad hump, no half-power band: confirm with the coast-down Bode" : q.af < 2.5 ? "critically damped (AF < 2.5)" : q.speed_rpm < d.speeds.min_rpm ? "pass quickly during run-up" : "inside the speed range: check separation"}</td></tr>)}</tbody></table></div></>}
 
       {d && tab === 3 && <div className="card"><h3>Acceptance criteria · API 617 8.3.2 {d.log ? "(with the test log)" : "(predicted; enter the test log for measured values)"}</h3>
         <div className="scroll"><table className="t"><thead><tr><th>Check</th><th>Criterion</th><th>Predicted</th><th>Measured</th><th>Status</th></tr></thead>
@@ -504,6 +551,9 @@ export function MechRunTestPage(c: Ctx) {
           <label>Noise at 1 m dBA<input type="number" step="any" value={opt.noise_dba ?? ""} onChange={(e) => setOpt({ ...opt, noise_dba: num(e.target.value) })} /></label>
           <label>Predicted runout µm<input type="number" step="any" value={opt.runout_um ?? 4} onChange={(e) => setOpt({ ...opt, runout_um: num(e.target.value) })} /></label>
           <label>Bearing metal limit °C<input type="number" value={opt.bearing_temp_limit_c ?? 105} onChange={(e) => setOpt({ ...opt, bearing_temp_limit_c: num(e.target.value) })} /></label>
+          <label>Trip set point rpm<input type="number" value={opt.trip_setpoint_rpm ?? ""} placeholder={fmt(d.speeds.trip_rpm, 0)} onChange={(e) => setO({ trip_setpoint_rpm: num(e.target.value) })} /></label>
+          <label>Trip measured rpm<input type="number" value={opt.trip_measured_rpm ?? ""} onChange={(e) => setO({ trip_measured_rpm: num(e.target.value) })} /></label>
+          <label>DGS primary vent ref Nm³/h<input type="number" step="any" value={opt.dgs_primary_ref_nm3h ?? 4.5} onChange={(e) => setO({ dgs_primary_ref_nm3h: num(e.target.value) })} /></label>
         </div>
         <button className="btn primary" style={{ marginTop: 10 }} onClick={() => load()}>Re-evaluate</button></div>}
 
@@ -539,10 +589,12 @@ export function MechRunTestPage(c: Ctx) {
             <button className="btn" onClick={() => setLog([])} disabled={!log.length}>Clear</button>
             <button className="btn primary" onClick={() => load()}>Evaluate</button>
           </div>
-          <div className="scroll mrt-log"><table className="t"><thead><tr>{LOGCOLS.map((k) => <th key={k}>{k}</th>)}<th>Status</th></tr></thead>
+          <div className="scroll mrt-log"><table className="t"><thead><tr>{LOGCOLS.map((k) => <th key={k} title={k}>{k === "time" || k === "seq" ? k : T(k)}</th>)}<th>Status</th></tr></thead>
             <tbody>{log.map((r, i) => <tr key={i}>{LOGCOLS.map((k) => <td key={k}><input className="inp cell" value={r[k] ?? ""} onChange={(e) => setLog(log.map((x, j) => (j === i ? { ...x, [k]: e.target.value } : x)))} /></td>)}
               <td>{d.log?.rows[i] && <span title={d.log.rows[i].flags.join("; ")}><Pill s={d.log.rows[i].status} /></span>}</td></tr>)}</tbody></table></div>
-          <p className="muted small">Columns: N1 speed rpm, V1/V2 X-Y shaft vibration µm pk-pk, V5/V6-Z axial position µm, TA1–TA12 bearing metal °C, TD oil drain °C, oil supply T / P, seq (Seq 1–5 or nor). CSV headers must match.</p></div>
+          <p className="muted small">One row every 15 min. Columns: {T("N1")} speed rpm, {T("V1-X")}/{T("V1-Y")}/{T("V2-X")}/{T("V2-Y")} shaft vibration µm pk-pk, {T("V5-Z")}/{T("V6-Z")} axial position µm,
+            {` ${T("TA1")}…${T("TA12")}`} bearing metal °C, {T("TD1")}/{T("TD2")} oil drain °C, {T("T_oil")} / {T("P_oil")} oil supply, {T("SG_DE")}/{T("SG_NDE")} seal vents Nm³/h, seq (Seq 1–5 or nor).
+            CSV headers may be the tags or the internal keys (hover a header).</p></div>
         <div className="grid" style={{ marginTop: 14 }}>
           {logPlot && <div className="card"><h3>Measured vs predicted</h3><Plot height={300} data={logPlot} layout={{ xaxis: { title: "Time (min)" }, yaxis: { title: "µm pk-pk" } }} /></div>}
           <div className="card"><h3>Coast-down Bode points</h3>
@@ -578,12 +630,29 @@ export function MechRunTestPage(c: Ctx) {
           <h3 style={{ marginTop: 14 }}>Retest rules</h3><ul className="small">{d.retest_rules.map((s: string) => <li key={s}>{s}</li>)}</ul></div>
       </div>}
 
-      {d && tab === 7 && <div className="card"><h3>Report</h3>
-        <p>The PDF holds the procedure summary, test-train diagram and equipment list, the speed-time and oil charts, the predicted Bode / polar / centreline plots, the acceptance
-          table, the waterfall summary, the URT, the test log, coast-down, gas leak test and the inspection checklist, with the inputs entered on these tabs.</p>
-        <table className="t" style={{ maxWidth: 640 }}><tbody>{[["Acceptance", d.status], ["URT", d.urt.status], ["Test log", d.log?.status ?? "review"], ["Gas leak test", d.leak.status]].map(([k, s]) =>
-          <tr key={k}><td>{k}</td><td><Pill s={s} /></td></tr>)}</tbody></table>
-        <button className="btn primary" style={{ marginTop: 12 }} disabled={busy} onClick={() => saveFrom("/api/mrt/report.pdf", body(), `${safeName(key)}_MRT.pdf`)}>Download PDF report</button></div>}
+      {tab === 7 && <TagsPanel project={c.project} setProject={c.setProject} groups={["vibration", "temperature", "lube oil", "seal gas", "speed"]} />}
+
+      {d && tab === 8 && <div className="grid">
+        <div className="card"><h3>Report</h3>
+          <p className="small">Cover with the 2.5D test-train picture and the result summary, contents, set-up and instrument list with calibration, procedure and plan, lube-oil
+            variation tests, trend, slow-roll compensated Bode, polar, orbits and shaft centreline, critical speeds and separation margins, spectra / waterfall / sub-synchronous
+            screening, bearings and oil, acceptance, trip test and URT, the 15-min log, seal and gas leak tests, inspection, deviations, legend and sign-off.</p>
+          <table className="t" style={{ maxWidth: 640 }}><tbody>{[["Acceptance", d.status], ["URT", d.urt.status], ["Test log", d.log?.status ?? "review"], ["Gas leak test", d.leak.status]].map(([k, s]) =>
+            <tr key={k}><td>{k}</td><td><Pill s={s} /></td></tr>)}</tbody></table>
+          <button className="btn primary" style={{ marginTop: 12 }} disabled={busy} onClick={report}>Download PDF report</button>
+          <p className="muted small">Document number, client and sign-off names: Tags & glossary tab.</p></div>
+        <div className="card"><h3>Instrument calibration</h3><table className="t small"><thead><tr><th>Tag</th><th>Instrument</th><th>Calibration (date / certificate)</th></tr></thead>
+          <tbody>{d.instruments.map((r: Json) => <tr key={r.key}><td className="mono">{T(r.key)}</td><td className="small">{r.instrument}</td>
+            <td><input className="inp" value={opt.calibration?.[r.key] ?? ""} onChange={(e) => setO({ calibration: { ...(opt.calibration ?? {}), [r.key]: e.target.value } })} /></td></tr>)}</tbody></table></div>
+        <div className="card"><h3>Deviations and non-conformances</h3><table className="t small"><thead><tr><th>Item</th><th>Description</th><th>Disposition</th><th /></tr></thead>
+          <tbody>{(opt.deviations ?? []).map((x: Json, i: number) => <tr key={i}>{["item", "description", "disposition"].map((k) => <td key={k}><input className="inp" value={x[k] ?? ""}
+            onChange={(e) => setO({ deviations: opt.deviations.map((y: Json, j: number) => (j === i ? { ...y, [k]: e.target.value } : y)) })} /></td>)}
+            <td><button className="btn" onClick={() => setO({ deviations: opt.deviations.filter((_: Json, j: number) => j !== i) })}>×</button></td></tr>)}</tbody></table>
+          <button className="btn" onClick={() => setO({ deviations: [...(opt.deviations ?? []), { item: "", description: "", disposition: "" }] })}>Add deviation</button></div>
+        <div className="card"><h3>Inspection findings</h3>{d.inspection.map((q: Json) => <label key={q.key} className="small" style={{ display: "block", marginBottom: 6 }}>{q.item}
+          <input className="inp" style={{ width: "100%" }} placeholder="finding / remark" value={opt.inspection_notes?.[q.key] ?? ""}
+            onChange={(e) => setO({ inspection_notes: { ...(opt.inspection_notes ?? {}), [q.key]: e.target.value } })} /></label>)}</div>
+      </div>}
     </>
   );
 }

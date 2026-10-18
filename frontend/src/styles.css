@@ -319,3 +319,14 @@ tr.sel td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .run-pill { position: relative; overflow: hidden; display: inline-flex; align-items: center; gap: 8px; }
 .run-pill i { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent); transition: width .5s linear; }
 .pt-tagt { font: 600 9px var(--mono, monospace); fill: #0b5cad; }
+.sumchips { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; margin: 0 0 14px; }
+.sumchip { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 6px 10px; background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--muted); font-size: 11.5px; }
+.sumchip b { font: 600 11px var(--mono); color: var(--ink); } .sumchip i { font: 600 10px var(--mono); text-transform: uppercase; font-style: normal; }
+.sumchip.pass { border-left-color: var(--pass, #1f9d63); } .sumchip.pass i { color: var(--pass, #1f9d63); }
+.sumchip.fail { border-left-color: var(--fail, #d6453a); } .sumchip.fail i { color: var(--fail, #d6453a); }
+.sumchip.review, .sumchip.attention { border-left-color: #e0a020; } .sumchip.review i, .sumchip.attention i { color: #b07a10; }
+.capture { position: absolute; left: -10000px; top: 0; width: 1400px; pointer-events: none; }
+.pt-phase { border: 1px solid var(--line); background: var(--panel-2); padding: 8px 10px; display: grid; gap: 6px; }
+.pt-phase .bar { height: 7px; background: var(--line); position: relative; } .pt-phase .bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
+.pt-stab { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 8px; font-size: 11px; }
+.pt-stab .ok { color: var(--pass, #1f9d63); } .pt-stab .no { color: #b07a10; }

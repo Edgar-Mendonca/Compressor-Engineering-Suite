@@ -51,6 +51,8 @@ INSTRUMENTS = [
 ]
 STABILITY = [("Inlet pressure", "2.0 %"), ("Inlet temperature", "0.3 %"), ("Discharge pressure", "2.0 %"),
              ("Inlet volume flow", "0.5 %"), ("Speed", "0.5 %"), ("Polytropic efficiency (max - min over >= 5 min)", "0.5 %")]
+FLUCT = [("fl_p1", "Inlet pressure", 2.0), ("fl_t1", "Inlet temperature", 0.3), ("fl_p2", "Discharge pressure", 2.0),
+         ("fl_q", "Inlet volume flow", 0.5), ("fl_n", "Speed", 0.5), ("fl_eta", "Polytropic efficiency", 0.5)]
 PIPE_IN = [4, 6, 8, 10, 12, 14, 16, 18, 20, 24, 28, 30, 36, 42, 48]
 
 
@@ -263,7 +265,7 @@ def type1_check(project, res: dict, sp: dict, t1: dict) -> dict:
 
 
 # ---------------------------------------------------------------- orifice and data reduction
-def orifice_mass_flow(d: float, D: float, dp: float, p1: float, rho: float, mu: float, kappa: float) -> float:
+def orifice_mass_flow(d: float, D: float, dp: float, p1: float, rho: float, mu: float, kappa: float, detail: bool = False):
     """ISO 5167-2 orifice, corner taps, Reader-Harris/Gallagher C, expansibility eps."""
     beta = d / D
     eps = 1 - (0.351 + 0.256 * beta**4 + 0.93 * beta**8) * (1 - ((p1 - dp) / p1) ** (1 / kappa))
@@ -274,6 +276,8 @@ def orifice_mass_flow(d: float, D: float, dp: float, p1: float, rho: float, mu: 
         Re = 4 * m / (math.pi * D * mu)
         A = (19000 * beta / Re) ** 0.8
         C = 0.5961 + 0.0261 * beta**2 - 0.216 * beta**8 + 0.000521 * (1e6 * beta / Re) ** 0.7 + (0.0188 + 0.0063 * A) * beta**3.5 * (1e6 / Re) ** 0.3
+    if detail:
+        return {"m": m, "beta": beta, "C": C, "eps": eps, "E": E, "Re_D": Re, "dp": dp, "p1": p1, "rho": rho}
     return m
 
 
@@ -295,16 +299,24 @@ def _total(gas, T, P, m, D):
     return T0, P0, c
 
 
+def heat_loss_estimate(setup: dict, T01: float, T02: float) -> float:
+    """Casing heat loss (W) by natural convection + radiation, h about 9 W/m2K, from an equivalent bare casing."""
+    D, L = setup.get("casing_D_m", 1.0), setup.get("casing_L_m", 1.5)
+    return 9.0 * math.pi * D * L * max(0.5 * (T01 + T02) - c_to_k(setup.get("t_amb_c", 25.0)), 0.0)
+
+
 def reduce_point(gas, comp, pt: dict, setup: dict, method: str = "sandberg_colby") -> dict:
     T1, P1 = c_to_k(pt["t1_c"]), bar_to_pa(pt["p1_bara"])
     T2, P2 = c_to_k(pt["t2_c"]), bar_to_pa(pt["p2_bara"])
     N = pt["n_rpm"]
+    orf = None
     if pt.get("m_kg_s"):
         m = float(pt["m_kg_s"])
     else:
         Tu, Pu = c_to_k(pt.get("tu_c", pt["t1_c"])), bar_to_pa(pt.get("pu_bara", pt["p1_bara"]))
         su = gas.state(Tu, Pu)
-        m = orifice_mass_flow(setup["orifice_d_m"], setup["orifice_D_m"], pt["dp_kpa"] * 1e3, Pu, su.rho, _mu(comp, Tu, su), float(su.k))
+        orf = orifice_mass_flow(setup["orifice_d_m"], setup["orifice_D_m"], pt["dp_kpa"] * 1e3, Pu, su.rho, _mu(comp, Tu, su), float(su.k), detail=True)
+        m = orf["m"]
     T01, P01, c1 = _total(gas, T1, P1, m, setup["D1_pipe_m"])
     T02, P02, c2 = _total(gas, T2, P2, m, setup["D2_pipe_m"])
     h1, h2, s1, s2 = gas.h(T01, P01), gas.h(T02, P02), gas.s(T01, P01), gas.s(T02, P02)
@@ -317,29 +329,55 @@ def reduce_point(gas, comp, pt: dict, setup: dict, method: str = "sandberg_colby
         hp = efficiency_from_discharge(gas, T01, P01, P02, T02) * dh
     else:  # Sandberg-Colby: T ds integrated with a log-mean temperature
         hp = dh - (s2 - s1) * (T02 - T01) / math.log(T02 / T01)
-    q_loss = float(pt.get("heat_loss_kw") or 0.0) * 1e3
+    est = pt.get("heat_loss_kw") in (None, "")
+    q_loss = heat_loss_estimate(setup, T01, T02) if est else float(pt["heat_loss_kw"]) * 1e3
     w = dh + q_loss / m                                       # work input = enthalpy rise + casing heat loss
+    # Leakage: balance-piston leakage returns to suction, so the impellers carry m (1 + leak) while the orifice
+    # reads the through-flow m; the seal (DGS primary vent) leakage leaves the loop.
+    m_bal = m * float(setup.get("balance_leak_pct", 0.0)) / 100
+    m_seal = float(setup.get("seal_leak_kg_s", 0.0))
+    m_imp = m + m_bal
     rho1 = gas.density(T01, P01)
-    qv = m / rho1
+    qv = m_imp / rho1
     d = _dimless(gas, comp, T01, P01, T02, P02, qv, N, setup["D2"], setup["b2"])
     mech = float(setup.get("mech_loss_kw", 0.0)) * (N / setup["N_ref"]) ** 2.5
-    return {"m_kg_s": m, "qv_m3_h": qv * 3600, "T01_c": k_to_c(T01), "P01_bara": P01 / 1e5, "T02_c": k_to_c(T02), "P02_bara": P02 / 1e5,
+    return {"m_kg_s": m, "m_imp_kg_s": m_imp, "m_balance_kg_s": m_bal, "m_seal_kg_s": m_seal, "qv_m3_h": qv * 3600, "qv_flange_m3_h": m / rho1 * 3600,
+            "T01_c": k_to_c(T01), "P01_bara": P01 / 1e5, "T02_c": k_to_c(T02), "P02_bara": P02 / 1e5,
             "c1_m_s": c1, "c2_m_s": c2, "h1": h1, "h2": h2, "s1": s1, "s2": s2, "head_kj_kg": hp / 1e3, "work_kj_kg": w / 1e3,
-            "eta_p": hp / w, "gas_power_kw": m * w / 1e3, "shaft_power_kw": m * w / 1e3 + mech, "mech_loss_kw": mech,
-            "pressure_ratio": P02 / P01, "n_rpm": N, **d}
+            "eta_p": hp / w, "gas_power_kw": m_imp * w / 1e3, "shaft_power_kw": m_imp * w / 1e3 + mech, "mech_loss_kw": mech,
+            "heat_loss_kw": q_loss / 1e3, "heat_loss_estimated": est, "orifice": orf,
+            "psi": hp / d["U_m_s"] ** 2, "pressure_ratio": P02 / P01, "n_rpm": N, **d}
 
 
-def convert_point(red: dict, sp: dict, spec_gas, N_target: float, re_correction: bool = False, mech_kw: float = 0.0) -> dict:
+def reynolds_correction(re_t: float, re_sp: float, b2_m: float, rough_in: float = 125e-6) -> float:
+    """PTC 10 machine Reynolds number correction: (1 - eta_sp) / (1 - eta_t) = (RA_sp / RA_t) (RB_sp / RB_t), with
+    RA = 0.066 + 0.934 (4.8e6 b / Re)^C, C = 0.988 / Re^0.243, RB = log(0.000125 + 13.67 / Re) / log(eps + 13.67 / Re)
+    (b in ft, roughness eps in inches)."""
+    b = b2_m / 0.3048
+
+    def RA(re):
+        return 0.066 + 0.934 * (4.8e6 * b / re) ** (0.988 / re**0.243)
+
+    def RB(re):
+        return math.log10(0.000125 + 13.67 / re) / math.log10(rough_in + 13.67 / re)
+    return (RA(re_sp) / RA(re_t)) * (RB(re_sp) / RB(re_t))
+
+
+def convert_point(red: dict, sp: dict, spec_gas, N_target: float, re_correction: bool = False, mech_kw: float = 0.0, leak_frac: float = 0.0) -> dict:
     r = N_target / red["n_rpm"]
     eta = red["eta_p"]
-    if re_correction:  # simple Wiesner-type ratio, only if contractually allowed (not for Type 2 here by default)
-        eta = 1 - (1 - eta) * (0.3 + 0.7 * (sp["reynolds"] * N_target / sp["N"] / red["reynolds"]) ** -0.2)
+    f_re = 1.0
+    if re_correction:
+        f_re = reynolds_correction(red["reynolds"], sp["reynolds"] * N_target / sp["N"], sp["b2"])
+        eta = 1 - (1 - eta) * f_re
     qv = red["qv_m3_h"] / 3600 * r
     hp = red["head_kj_kg"] * 1e3 * r * r
-    m = qv * sp["rho1"]
+    m = qv * sp["rho1"]                       # impeller flow at specified conditions
     p2, pp = _head_to_p2(spec_gas, sp["T1"], sp["P1"], hp, eta)
-    return {"qv_m3_h": qv * 3600, "m_kg_s": m, "head_kj_kg": hp / 1e3, "eta_p": eta, "P2_bara": p2 / 1e5, "T2_c": k_to_c(pp["T2"]),
-            "pressure_ratio": p2 / sp["P1"], "shaft_power_kw": m * pp["dh"] / 1e3 + mech_kw * (N_target / sp["N"]) ** 2.5, "n_rpm": N_target}
+    return {"qv_m3_h": qv * 3600 / (1 + leak_frac), "qv_imp_m3_h": qv * 3600, "m_kg_s": m / (1 + leak_frac), "head_kj_kg": hp / 1e3, "eta_p": eta,
+            "eta_test": red["eta_p"], "re_factor": f_re, "P2_bara": p2 / 1e5, "T2_c": k_to_c(pp["T2"]),
+            "pressure_ratio": p2 / sp["P1"], "gas_power_kw": m * pp["dh"] / 1e3, "rv": spec_gas.density(pp["T2"], p2) / sp["rho1"], "mech_loss_kw": mech_kw * (N_target / sp["N"]) ** 2.5,
+            "shaft_power_kw": m * pp["dh"] / 1e3 + mech_kw * (N_target / sp["N"]) ** 2.5, "n_rpm": N_target}
 
 
 UNC = {"p1_bara": ("rel", 0.001), "p2_bara": ("rel", 0.001), "t1_c": ("pt100", 0), "t2_c": ("pt100", 0), "dp_kpa": ("rel", 0.001), "n_rpm": ("rel", 0.001)}
@@ -401,7 +439,8 @@ def simulate_log(design: dict, sp: dict, spec_line_points: list, setup: dict, te
                     "p1_bara": round((P1 - rho1 * c1 * c1 / 2) / 1e5 * n(0.0005), 4), "t1_c": round(k_to_c(T1 - c1 * c1 / 2 / cp1) + rng.normal(0, 0.05), 2),
                     "p2_bara": round((p2 - rho2 * c2 * c2 / 2) / 1e5 * n(0.0005), 4), "t2_c": round(k_to_c(T2 - c2 * c2 / 2 / cp1) + rng.normal(0, 0.08), 2),
                     "dp_kpa": round(dp / 1e3 * n(0.001), 3), "pu_bara": round(pu / 1e5, 4), "tu_c": round(k_to_c(T1) + 0.1, 2),
-                    "heat_loss_kw": round(0.35 * frac, 3), "surge": surge})
+                    "heat_loss_kw": None, "surge": surge,
+                    **{k: round(abs(rng.normal(0.35, 0.12)) * lim_ / 2 * (1.6 if surge else 1), 3) for k, _, lim_ in FLUCT}})
     return out
 
 
@@ -463,7 +502,9 @@ def ptc10_analysis(project, res: dict, options: dict | None = None, logs: dict |
         st1 = test_gas.state(T1t, P1t)
         D = sp["D1_pipe_m"]
         setup = {"D1_pipe_m": D, "D2_pipe_m": sp["D2_pipe_m"], "orifice_D_m": D, "D2": sp["D2"], "b2": sp["b2"], "N_ref": sel["N_rpm"],
-                 "mech_loss_kw": sp["power_kw"] - sp["m"] * sp["dh"] / 1e3}
+                 "mech_loss_kw": sp["power_kw"] - sp["m"] * sp["dh"] / 1e3, "balance_leak_pct": float(o.get("balance_leak_pct", 0.0)),
+                 "seal_leak_kg_s": float(o.get("seal_leak_kg_s", 0.002)), "casing_D_m": float(o.get("casing_od_m") or 2.4 * sp["D2"]),
+                 "casing_L_m": float(o.get("casing_length_m") or (0.55 * sp["n_stages"] + 1.0) * sp["D2"] * 2), "t_amb_c": float(o.get("ambient_c", 25.0))}
         setup["orifice_d_m"] = size_orifice(sel["m_kg_s"], D, st1.rho, _mu(comp, T1t, st1), float(st1.k), P1t)
         setup["beta"] = setup["orifice_d_m"] / D
         # Predicted (specified) speed lines and their test-condition equivalents.
@@ -486,6 +527,8 @@ def ptc10_analysis(project, res: dict, options: dict | None = None, logs: dict |
                                                   "eta_p": p["eta_p"]} for p in pts]})
         # Test log: entered readings or the simulated example.
         key = str(sp["section"])
+        recorr = bool(o.get("reynolds_correction", True))
+        sp_psi = sp["head"] / sp["U_m_s"] ** 2
         sim = not (logs or {}).get(key)
         log = (logs or {}).get(key) or {}
         for i, ln in enumerate(lines):
@@ -496,25 +539,67 @@ def ptc10_analysis(project, res: dict, options: dict | None = None, logs: dict |
                 try:
                     red = reduce_point(test_gas, comp, pt, setup, method)
                     N_t = sp["N"] * ln["speed_frac"] * (pt["n_rpm"] / ln["N_test_rpm"])
-                    conv = convert_point(red, sp, spec_gas, N_t, bool(o.get("reynolds_correction", False)), setup["mech_loss_kw"])
-                    conv_a = convert_point(red, sp, spec_gas, N_t * (1 + adj), bool(o.get("reynolds_correction", False)), setup["mech_loss_kw"]) if adj else None
+                    lk = setup["balance_leak_pct"] / 100
+                    conv = convert_point(red, sp, spec_gas, N_t, recorr, setup["mech_loss_kw"], lk)
+                    conv_a = convert_point(red, sp, spec_gas, N_t * (1 + adj), recorr, setup["mech_loss_kw"], lk) if adj else None
                     unc = uncertainty(test_gas, comp, pt, setup, method, red, sp, spec_gas, N_t)
-                    sim_chk = {"rv": red["rv"] / sp["rv"], "phi": red["phi"] / sp["phi"], "mach": red["mach"] - sp["mach"], "re": red["reynolds"] / sp["reynolds"]}
+                    # each point against its equivalent specified point: same phi, volume ratio of the converted point, Mach and
+                    # Reynolds of the specified machine at the equivalent speed
+                    fe_ = N_t / sp["N"]
+                    sim_chk = {"rv": red["rv"] / conv["rv"], "phi": red["phi"] / sp["phi"], "mach": red["mach"] - sp["mach"] * fe_,
+                               "re": red["reynolds"] / (sp["reynolds"] * fe_), "psi": red["psi"] / sp_psi}
+                    mlo, mhi = mach_limits(sp["mach"] * fe_)
+                    rlo, rhi = reynolds_limits(sp["reynolds"] * fe_)
+                    sim_ok = {"rv": 0.95 <= sim_chk["rv"] <= 1.05, "mach": mlo <= sim_chk["mach"] <= mhi, "re": rlo <= sim_chk["re"] <= rhi}
+                    stab = [{"key": k, "item": lab, "value": pt.get(k), "limit": lim_, "pass": pt.get(k) is None or float(pt[k]) <= lim_} for k, lab, lim_ in FLUCT]
                     rows.append({"point": pt.get("point"), "surge": bool(pt.get("surge")), "test": red, "converted": conv, "adjusted": conv_a,
-                                 "uncertainty_pct": unc, "similarity": sim_chk})
+                                 "uncertainty_pct": unc, "similarity": sim_chk, "similarity_ok": sim_ok, "stability": stab,
+                                 "stable": all(x["pass"] for x in stab), "measured_stability": any(x["value"] is not None for x in stab)})
                 except (ValueError, ZeroDivisionError, KeyError, RuntimeError) as exc:
                     rows.append({"point": pt.get("point"), "error": str(exc)})
             ln["results"] = rows
         acc = acceptance(sp, lines, adj, o)
+        basis = "adjusted" if adj else "converted"
+        surge_line, dev = [], []
+        for ln in lines:
+            rs = sorted([r[basis] for r in ln["results"] if r.get(basis)], key=lambda r: r["qv_m3_h"])
+            if not rs:
+                continue
+            surge_line.append({"speed_frac": ln["speed_frac"], "qv_m3_h": rs[0]["qv_m3_h"], "head_kj_kg": rs[0]["head_kj_kg"], "P2_bara": rs[0]["P2_bara"]})
+            pr = sorted(ln["predicted"], key=lambda p: p["qv_m3_h"])
+            qg = sp["qv"] * 3600 * ln["speed_frac"]
+            if len(rs) >= 2 and rs[0]["qv_m3_h"] <= qg <= rs[-1]["qv_m3_h"]:
+                q_ = [r["qv_m3_h"] for r in rs]
+                qp = [p["qv_m3_h"] for p in pr]
+                row_ = {"speed_frac": ln["speed_frac"], "qv_m3_h": qg}
+                for k_, pk_, sc in (("head_kj_kg", "head_kj_kg", 1), ("eta_p", "eta_p", 100), ("shaft_power_kw", "power_kw", 1), ("P2_bara", "P2_bara", 1)):
+                    t_ = float(np.interp(qg, q_, [r[k_] for r in rs])) * sc
+                    p_ = float(np.interp(qg, qp, [p[pk_] for p in pr])) * sc
+                    row_[k_] = {"test": t_, "predicted": p_, "deviation_pct": (t_ / p_ - 1) * 100 if p_ else None}
+                dev.append(row_)
+        def _props(g, cmp_, T, P):
+            st = g.state(T, P)
+            return {"mw": float(st.mw), "k": float(st.k), "z": P * float(st.mw) / (float(st.rho) * 8314.462 * T), "cp": float(st.cp), "rho": float(st.rho),
+                    "sound": float(st.sound), "mu": _mu(cmp_, T, st), "T_c": k_to_c(T), "P_bara": P / 1e5}
+        props = {"specified": _props(res["_gas"], project.gas.components, sp["T1"], sp["P1"]), "test": _props(test_gas, comp, T1t, P1t)}
         sections.append({"spec": sp, "combinations": combos, "selected": sel, "test_gas": comp, "setup": setup, "lines": lines,
-                         "simulated": sim, "acceptance": acc, "coastdown": _coastdown(res, sel, o),
+                         "simulated": sim, "acceptance": acc, "coastdown": _coastdown(res, sel, o), "surge_line": surge_line, "deviation": dev,
+                         "gas_properties": props, "reynolds_correction": recorr, "basis": basis,
                          "seal_gas": {"primary": "Test gas (" + ("/".join(comp) if test_type == 2 else "process gas") + ")",
                                       "secondary": "N2", "buffer": "N2", "separation": "N2 / instrument air"},
                          "valves": [{"tag": "A", "name": "Loop balance valve A", "s1": "open", "s2": "closed"},
                                     {"tag": "B", "name": "Loop balance valve B", "s1": "closed", "s2": "open"},
                                     {"tag": "C", "name": "Seal balance valve C", "s1": "closed", "s2": "open"}] if len(secs) > 1 else []})
     stat = [a["status"] for s in sections for a in (s.get("acceptance") or {}).get("checks", [])]
-    return {"test_type": test_type, "method": method, "speed_adjust_pct": adj * 100, "speed_fracs": fracs, "criticals_rpm": crit,
+    s0 = next((x for x in sections if x.get("selected")), None)
+    scope = (f"Type 2 test on {'/'.join((s0 or {}).get('test_gas') or ['substitute gas'])}: the specified gas cannot be run safely or economically on the "
+             "shop loop at the specified pressure, temperature and power, so the test reproduces the specified flow coefficient, volume ratio, Mach and "
+             "Reynolds numbers on a substitute gas and converts the results by similarity (PTC 10 Table 3-2.1-2)."
+             if test_type == 2 else "Type 1 test on the specified gas near the specified conditions (PTC 10 Table 3-1 limits); results are corrected for the "
+             "small deviations from the specified inlet conditions and speed.")
+    return {"test_type": test_type, "method": method, "speed_adjust_pct": adj * 100, "speed_fracs": fracs, "criticals_rpm": crit, "scope": scope,
+            "property_method": {"pr": "Peng-Robinson equation of state", "coolprop": "CoolProp (reference multiparameter equations of state)"}.get(project.gas.backend, project.gas.backend),
+            "specified_gas": project.gas.components, "reynolds_correction": bool(o.get("reynolds_correction", True)),
             "sections": sections, "instruments": INSTRUMENTS, "stability": STABILITY, "type1_limits": TYPE1_LIMITS,
             "status": "fail" if "fail" in stat else ("pass" if stat and all(s == "pass" for s in stat) else "review"),
             "procedure": PROCEDURE(test_type, len(secs))}
@@ -570,59 +655,104 @@ def PROCEDURE(test_type: int, n_sec: int) -> list[str]:  # noqa: N802
 
 
 # ---------------------------------------------------------------- PDF report
-def ptc10_report(project, out: dict, train_components: list | None = None) -> bytes:
-    """A4 PDF in the PTC 10 report layout: summary, similarity, test set-up drawing, test design, data and results
-    per speed, curves (as tested / converted / adjusted vs predicted), uncertainty, orifice, coast-down and method."""
+LEGEND_KEYS = ["p1", "t1", "p2", "t2", "dp", "pu", "tu", "N1", "power", "qloss", "gas", "valve", "asv", "cooler", "SG_DE", "SG_NDE", "SG_P", "SEP", "T_oil", "P_oil"]
+INSTR_KEYS = ["t1", "p1", "dp", "pu", "N1", "dp", "gas"]
+
+
+def ptc10_report(project, out: dict, train_components: list | None = None, images: dict | None = None) -> bytes:
+    """A4 PDF: cover with the 2.5D loop picture and result summary, scope and gases, set-up and instruments,
+    procedure, per section the test design and screening, similarity per point, data / stability / corrections /
+    results per speed, a worked data reduction, curves (converted and as tested) with the surge line,
+    deviations, API 617 acceptance and conclusions, orifice, coast-down and method, legend and sign-off."""
     import io
 
     from matplotlib.backends.backend_pdf import PdfPages
 
     from compsuite.testing.drawings import Doc, loop
-    from compsuite.testing.mrt import style
+    from compsuite.testing.mrt import cover_info, doc_info, style
+    from compsuite.testing.tags import GLOSSARY, tag_names, tag_table
 
-    f = lambda v, n=2: "-" if v is None else (f"{v:.{n}f}" if isinstance(v, (int, float, np.floating)) else str(v))  # noqa: E731
+    f = lambda v, n=2: "-" if v is None or v == "" else (f"{v:.{n}f}" if isinstance(v, (int, float, np.floating)) else str(v))  # noqa: E731
     tt = out["test_type"]
+    T = tag_names(project.test_tags)
     pal = ["#0b5cad", "#2e9e6b", "#d1782a", "#7b3fb5", "#c0392b"]
+    info = doc_info(project, "Performance test report")
+    comps = train_components or [{"kind": "motor", "name": "Shop motor"}, {"kind": "coupling", "name": "LS coupling"},
+                                 {"kind": "gearbox", "name": "Shop gearbox"}, {"kind": "coupling", "name": "HS coupling"}, {"kind": "casing", "name": "Compressor"}]
+    s0 = next((s for s in out["sections"] if s.get("selected")), None)
+    gas_name = "/".join(s0["test_gas"]) if s0 and tt == 2 else "GAS"
+    draw = lambda ax: loop(ax, comps, gas_name, len(out["sections"]), (s0 or {}).get("seal_gas"))  # noqa: E731
+    summ = []
+    for s in out["sections"]:
+        for c in (s.get("acceptance") or {}).get("checks", []):
+            summ.append((f"S{s['spec']['section']} {c['check'].split(' (')[0]}", f"{c['deviation_pct']:+.2f} %", c["status"]))
+        sel = s.get("selected") or {}
+        summ.append((f"S{s['spec']['section']} similarity / test limits", f"{sum(c['pass'] for c in sel.get('checks', []))}/{len(sel.get('checks', []))}",
+                     "pass" if sel.get("qualified") else "fail"))
+        pts = [r for ln in s.get("lines", []) for r in ln["results"] if "test" in r]
+        if pts:
+            summ.append((f"S{s['spec']['section']} point stability", f"{sum(r['stable'] for r in pts)}/{len(pts)}", "pass" if all(r["stable"] for r in pts) else "fail"))
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
-        d = Doc(pdf, f"{project.name} - shop performance test, ASME PTC 10-2022 Type {tt}")
-        d.page("Performance test - summary")
-        d.line(f"Test type {tt} ({'substitute test gas, similarity per Table 3-2.1-2' if tt == 2 else 'specified gas, Table 3-1 limits'}); "
-               f"head / efficiency by {out['method'].replace('_', '-')}; overall status {out['status'].upper()}", 9, bold=True)
-        for s in out["sections"]:
-            sel = s.get("selected")
-            if not sel:
-                d.line(f"Section {s['spec']['section']}: no feasible test combination.", 8, "#c0392b")
-                continue
-            acc = s["acceptance"]
-            d.line(f"Section {s['spec']['section']} - {'/'.join(s['test_gas']) if tt == 2 else 'specified gas'} at {sel['P1_bara']:.2f} bara, "
-                   f"{sel['T1_c']:.1f} C, test speed {sel['N_rpm']:.0f} rpm{' (simulated example readings)' if s.get('simulated') else ''}", 9, bold=True)
-            if acc.get("checks"):
-                d.table(["Item", "Guarantee", "Test", "Deviation %", "Status"],
-                        [(c["check"], f(c["guarantee"], 1), f(c["test"], 1), f(c["deviation_pct"]), c["status"]) for c in acc["checks"]], [0.07, 0.5, 0.62, 0.74, 0.86])
-            if sel.get("checks"):
-                d.line("Permissible deviation from specified operating parameters (PTC 10 Table 3-2.1-2 / 3-1)", 8.5, bold=True)
-                d.table(["Item", "Limit", "Value", "Assessment"],
-                        [(c["check"], c["limit"], f(c["value"], 3), "Qualified" if c["pass"] else "Not qualified") for c in sel["checks"]], [0.07, 0.48, 0.66, 0.8])
-        s0 = next((s for s in out["sections"] if s.get("selected")), None)
-        d.page("Test set-up - closed loop")
-        loop(d.drawing([0.04, 0.55, 0.92, 0.37]), train_components or [{"kind": "motor", "name": "Shop motor"}, {"kind": "coupling", "name": "LS coupling"},
-                                                                        {"kind": "gearbox", "name": "Shop gearbox"}, {"kind": "coupling", "name": "HS coupling"},
-                                                                        {"kind": "casing", "name": "Compressor"}],
-             "/".join(s0["test_gas"]) if s0 and tt == 2 else "GAS", len(out["sections"]), (s0 or {}).get("seal_gas"))
-        d.y = 0.53
-        d.line("Instruments", 10, bold=True)
-        d.table(["Instrument", "Parameter", "Accuracy", "Quantity"], out["instruments"], [0.07, 0.42, 0.62, 0.8], 7, 48)
-        d.line("Stability criteria per test point", 10, bold=True)
+        d = Doc(pdf, f"Shop performance test - ASME PTC 10-2022 Type {tt}", info)
+        sel0 = (s0 or {}).get("selected") or {}
+        d.cover("Performance test report", cover_info(project, info, [
+            ("Test type", f"PTC 10 Type {tt}"), ("Test gas", gas_name if tt == 2 else "specified gas"),
+            ("Test speed", f"{f(sel0.get('N_rpm'), 0)} rpm"), ("Overall status", out["status"].upper())]),
+            (images or {}).get("loop"), draw, summ)
+
+        d.page("1  Scope and test basis")
+        d.line(out["scope"], 8.5)
+        d.y -= 0.008
+        d.table(["Item", "Value"], [("Test code", f"ASME PTC 10-2022, Type {tt}; acceptance to API 617 9th ed. 8.3.5 / 8.3.6"),
+                                    ("Head and efficiency method", out["method"].replace("_", "-").title()), ("Gas property method", out["property_method"]),
+                                    ("Reynolds-number correction", "applied (PTC 10 RA / RB)" if out["reynolds_correction"] else "not applied (per contract)"),
+                                    ("Speed adjustment", f"{out['speed_adjust_pct']:+.1f} % (API 617 8.3.5.5)" if out["speed_adjust_pct"] else "none"),
+                                    ("Data", "simulated example readings" if any(s.get("simulated") for s in out["sections"]) else "measured test log")], [0.07, 0.36])
+        d.heading("Gas composition (mol %)")
+        tg = (s0 or {}).get("test_gas") or {}
+        keys = sorted(set(out["specified_gas"]) | set(tg), key=lambda k: -max(out["specified_gas"].get(k, 0), tg.get(k, 0)))
+        d.table(["Component", "Specified gas", "Test gas"], [(k, f(out["specified_gas"].get(k), 3), f(tg.get(k), 3) if tt == 2 else f(out["specified_gas"].get(k), 3)) for k in keys],
+                [0.07, 0.36, 0.6], 7)
+        if s0:
+            gp = s0["gas_properties"]
+            d.heading("Gas properties at the inlet (section 1)")
+            d.table(["Property", "Unit", "Specified", "Test"], [
+                ("Inlet pressure / temperature", "bara / C", f"{gp['specified']['P_bara']:.2f} / {gp['specified']['T_c']:.1f}", f"{gp['test']['P_bara']:.2f} / {gp['test']['T_c']:.1f}"),
+                ("Molecular weight", "kg/kmol", f(gp["specified"]["mw"]), f(gp["test"]["mw"])), ("Compressibility Z", "-", f(gp["specified"]["z"], 4), f(gp["test"]["z"], 4)),
+                ("Isentropic exponent k", "-", f(gp["specified"]["k"], 4), f(gp["test"]["k"], 4)), ("cp", "kJ/kg K", f(gp["specified"]["cp"] / 1e3, 4), f(gp["test"]["cp"] / 1e3, 4)),
+                ("Density", "kg/m3", f(gp["specified"]["rho"], 3), f(gp["test"]["rho"], 3)), ("Speed of sound", "m/s", f(gp["specified"]["sound"], 1), f(gp["test"]["sound"], 1)),
+                ("Dynamic viscosity", "uPa s", f(gp["specified"]["mu"] * 1e6, 3), f(gp["test"]["mu"] * 1e6, 3))], [0.07, 0.42, 0.58, 0.76])
+
+        d.page("2  Test set-up and instrumentation")
+        if not d.image((images or {}).get("loop"), [0.04, 0.6, 0.92, 0.3]):
+            draw(d.drawing([0.04, 0.6, 0.92, 0.3]))
+        d.y = 0.585
+        cal = (project.test_doc or {}).get("calibration") or {}
+        d.table(["Tag", "Instrument", "Parameter", "Accuracy", "Qty", "Calibration"],
+                [(T.get(k, k) if k != "dp" or i != 5 else "dP-BAL", r[0][:34], r[1][:22], r[2][:20], r[3][:24], cal.get(k, "enter")) for i, (k, r) in enumerate(zip(INSTR_KEYS, out["instruments"]))],
+                [0.07, 0.16, 0.44, 0.6, 0.73, 0.88], 6.5, 40)
+        d.heading("Stability criteria per test point (max - min over the reading period)")
         d.table(["Item", "Allowable fluctuation"], out["stability"], [0.07, 0.6])
-        d.line("Procedure", 10, bold=True)
+        d.heading("Valve line-up" if any(s.get("valves") for s in out["sections"]) else "Seal gas")
+        for s in out["sections"][:1]:
+            if s.get("valves"):
+                d.table(["Valve", "Section 1", "Section 2"], [(v["name"], v["s1"], v["s2"]) for v in s["valves"]], [0.07, 0.5, 0.7])
+            sg = s.get("seal_gas") or {}
+            d.line(f"Dry gas seals: primary {sg.get('primary', '-')}, secondary {sg.get('secondary', '-')}, buffer {sg.get('buffer', '-')}, separation {sg.get('separation', '-')}.", 8)
+
+        d.page("3  Test procedure")
         for i, t in enumerate(out["procedure"]):
-            d.line(f"{i + 1}. {t}", 7.5)
+            d.line(f"{i + 1}. {t}", 8)
+
         for s in out["sections"]:
             sp, sel = s["spec"], s.get("selected")
             if not sel:
+                d.page(f"Section {sp['section']} - no feasible test")
+                d.line("No feasible test combination: see the screening on the Test design tab.", 8, "#c0392b")
                 continue
-            d.page(f"Section {sp['section']} - test design")
+            S = f"S{sp['section']}"
+            d.page(f"4  {S} test design and gas screening")
             d.table(["Item", "Unit", "Specified", "Test"], [
                 ("Medium", "-", "process gas", "/".join(f"{k} {v:g}%" for k, v in s["test_gas"].items()) if tt == 2 else "process gas"),
                 ("Molecular weight", "kg/kmol", f(sp["mw"]), f(sel["mw"])),
@@ -640,98 +770,198 @@ def ptc10_report(project, out: dict, train_components: list | None = None) -> by
                 ("Specific volume ratio", "-", f(sp["rv"], 4), f(sel["rv"], 4)),
                 ("1st impeller D2 / b2", "mm", f"{sp['D2'] * 1e3:.0f} / {sp['b2'] * 1e3:.1f}", "same"),
                 ("Orifice d / D (beta)", "mm", "-", f"{s['setup']['orifice_d_m'] * 1e3:.1f} / {s['setup']['orifice_D_m'] * 1e3:.0f} ({s['setup']['beta']:.3f})")],
-                [0.07, 0.42, 0.58, 0.76])
+                [0.07, 0.42, 0.58, 0.76], 7)
+            if sel.get("checks"):
+                d.heading("Permissible deviations (PTC 10 Table 3-2.1-2 / 3-1) and stand limits")
+                d.table(["Item", "Limit", "Value", "Assessment"],
+                        [(c["check"], c["limit"], f(c["value"], 3), "Qualified" if c["pass"] else "Not qualified") for c in sel["checks"]], [0.07, 0.48, 0.66, 0.8], 7)
             if s["combinations"]:
-                d.line("Test-gas screening (all combinations)", 10, bold=True)
+                d.heading("Test-gas screening (all combinations)")
                 d.table(["Gas", "P1 bara", "N rpm", "T2 C", "Power kW", "Result"],
                         [(c["gas"], f(c["P1_bara"], 1), f(c.get("N_rpm"), 0), f(c.get("T2_c"), 0), f(c.get("power_kw"), 0),
-                          "Qualified" if c["qualified"] else c["reason"][:46]) for c in s["combinations"]], [0.07, 0.24, 0.34, 0.44, 0.53, 0.64], 7)
+                          "Qualified" if c["qualified"] else c["reason"][:46]) for c in s["combinations"]], [0.07, 0.24, 0.34, 0.44, 0.53, 0.64], 6.8)
+
+            d.page(f"5  {S} similarity per test point")
+            mlo, mhi = mach_limits(sp["mach"])
+            rlo, rhi = reynolds_limits(sp["reynolds"])
+            d.line(f"Each point against its equivalent specified point (same flow coefficient, specified machine at the equivalent speed). Limits: "
+                   f"rv,t/rv,sp 0.95-1.05; Mm,t - Mm,sp {mlo:+.3f} to {mhi:+.3f} at rated speed; Rem,t/Rem,sp {rlo:.2f}-{rhi:.0f}. phi and psi ratios to the "
+                   "guarantee point are information (the points span the speed line).", 7.5, "#5b6878")
+            rows_ = []
+            for ln in s["lines"]:
+                for r in ln["results"]:
+                    if "test" not in r:
+                        continue
+                    sm, ok = r["similarity"], r["similarity_ok"]
+                    rows_.append((f"{ln['speed_frac'] * 100:.0f} %", r["point"] + (" surge" if r["surge"] else ""), f(sm["phi"], 3), f(sm["psi"], 3), f(sm["rv"], 4),
+                                  f(sm["mach"], 4), f(sm["re"], 3), "pass" if all(ok.values()) else "fail"))
+            d.table(["Line", "Point", "phi ratio", "psi ratio", "rv ratio", "Mm diff", "Rem ratio", "Status"], rows_, [0.07, 0.15, 0.27, 0.38, 0.49, 0.6, 0.71, 0.84], 7)
+
             for ln in s["lines"]:
                 ok = [r for r in ln["results"] if "test" in r]
                 if not ok:
                     continue
-                d.page(f"Section {sp['section']} - {ln['speed_frac'] * 100:.0f} % speed: data and results")
+                d.page(f"6  {S} {ln['speed_frac'] * 100:.0f} % speed - data, stability, corrections and results")
                 cols = [0.07] + [0.36 + i * 0.12 for i in range(len(ok))]
                 rd = ln["readings"]
-                d.table(["Reading", *[r["point"] + (" surge" if r["surge"] else "") for r in ok]], [
-                    ("Speed rpm", *[f(p["n_rpm"], 0) for p in rd]), ("Inlet pressure bara", *[f(p["p1_bara"], 4) for p in rd]),
-                    ("Inlet temperature C", *[f(p["t1_c"]) for p in rd]), ("Discharge pressure bara", *[f(p["p2_bara"], 4) for p in rd]),
-                    ("Discharge temperature C", *[f(p["t2_c"]) for p in rd]), ("Orifice dp kPa", *[f(p.get("dp_kpa"), 3) for p in rd]),
-                    ("Orifice upstream P bara / T C", *[f"{f(p.get('pu_bara'), 3)}/{f(p.get('tu_c'), 1)}" for p in rd]),
-                    ("Casing heat loss kW", *[f(p.get("heat_loss_kw"), 3) for p in rd])], cols, 7)
+                d.table(["Reading (tag)", *[r["point"] + (" surge" if r["surge"] else "") for r in ok]], [
+                    (f"Speed {T['N1']} rpm", *[f(p["n_rpm"], 0) for p in rd]), (f"Inlet pressure {T['p1']} bara", *[f(p["p1_bara"], 4) for p in rd]),
+                    (f"Inlet temperature {T['t1']} C", *[f(p["t1_c"]) for p in rd]), (f"Discharge pressure {T['p2']} bara", *[f(p["p2_bara"], 4) for p in rd]),
+                    (f"Discharge temperature {T['t2']} C", *[f(p["t2_c"]) for p in rd]), (f"Orifice dp {T['dp']} kPa", *[f(p.get("dp_kpa"), 3) for p in rd]),
+                    (f"FE upstream {T['pu']} / {T['tu']}", *[f"{f(p.get('pu_bara'), 3)}/{f(p.get('tu_c'), 1)}" for p in rd])], cols, 6.8)
+                d.table(["Stability (fluctuation %)", *[r["point"] for r in ok]],
+                        [(f"{lab} (<= {lim_:g} %)", *[f(next(x["value"] for x in r["stability"] if x["key"] == k), 2) for r in ok]) for k, lab, lim_ in FLUCT] +
+                        [("Point accepted", *["pass" if r["stable"] else "fail" for r in ok])], cols, 6.8)
+                d.table(["Corrections", *[r["point"] for r in ok]], [
+                    ("Casing heat loss kW" + (" (estimated)" if ok[0]["test"]["heat_loss_estimated"] else ""), *[f(r["test"]["heat_loss_kw"], 2) for r in ok]),
+                    ("Balance-piston leakage kg/s", *[f(r["test"]["m_balance_kg_s"], 4) for r in ok]), ("Seal (DGS vent) leakage kg/s", *[f(r["test"]["m_seal_kg_s"], 4) for r in ok]),
+                    ("Mechanical losses at test speed kW", *[f(r["test"]["mech_loss_kw"], 1) for r in ok]),
+                    ("Reynolds factor (1-eta,sp)/(1-eta,t)", *[f(r["converted"]["re_factor"], 4) for r in ok])], cols, 6.8)
                 d.table(["Test results", *[r["point"] for r in ok]], [
                     ("Total inlet P bara / T C", *[f"{r['test']['P01_bara']:.4f}/{r['test']['T01_c']:.2f}" for r in ok]),
                     ("Total discharge P bara / T C", *[f"{r['test']['P02_bara']:.3f}/{r['test']['T02_c']:.2f}" for r in ok]),
-                    ("Mass flow kg/s", *[f(r["test"]["m_kg_s"], 3) for r in ok]), ("Inlet volume flow m3/h", *[f(r["test"]["qv_m3_h"], 1) for r in ok]),
-                    ("Enthalpy rise kJ/kg", *[f((r["test"]["h2"] - r["test"]["h1"]) / 1e3) for r in ok]),
+                    ("Mass flow (orifice) kg/s", *[f(r["test"]["m_kg_s"], 3) for r in ok]), ("Inlet volume flow m3/h", *[f(r["test"]["qv_m3_h"], 1) for r in ok]),
                     ("Polytropic head kJ/kg", *[f(r["test"]["head_kj_kg"]) for r in ok]), ("Polytropic efficiency %", *[f(r["test"]["eta_p"] * 100) for r in ok]),
-                    ("Flow coefficient ratio", *[f(r["similarity"]["phi"], 3) for r in ok]), ("Volume ratio ratio", *[f(r["similarity"]["rv"], 3) for r in ok]),
-                    ("Mach difference", *[f(r["similarity"]["mach"], 3) for r in ok]), ("Reynolds ratio", *[f(r["similarity"]["re"], 3) for r in ok])], cols, 7)
+                    ("Work coefficient psi", *[f(r["test"]["psi"], 4) for r in ok]), ("Shaft power kW", *[f(r["test"]["shaft_power_kw"], 0) for r in ok])], cols, 6.8)
                 for key, lab in (("converted", "Converted to specified conditions"), ("adjusted", f"Adjusted speed ({out['speed_adjust_pct']:+.1f} %)")):
                     if not ok[0].get(key):
                         continue
                     d.table([lab, *[r["point"] for r in ok]], [
                         ("Inlet volume flow m3/h", *[f(r[key]["qv_m3_h"], 1) for r in ok]), ("Polytropic head kJ/kg", *[f(r[key]["head_kj_kg"]) for r in ok]),
                         ("Polytropic efficiency %", *[f(r[key]["eta_p"] * 100) for r in ok]), ("Discharge pressure bara", *[f(r[key]["P2_bara"], 3) for r in ok]),
-                        ("Discharge temperature C", *[f(r[key]["T2_c"], 1) for r in ok]), ("Shaft power kW", *[f(r[key]["shaft_power_kw"], 0) for r in ok])], cols, 7)
-                d.table(["Expanded uncertainty (95 %)", *[r["point"] for r in ok]],
+                        ("Discharge temperature C", *[f(r[key]["T2_c"], 1) for r in ok]), ("Shaft power kW", *[f(r[key]["shaft_power_kw"], 0) for r in ok])], cols, 6.8)
+                d.table(["Expanded uncertainty U95", *[r["point"] for r in ok]],
                         [(lab, *[f"{r['uncertainty_pct'][k]:.2f} %" for r in ok]) for k, lab in
-                         (("qv_m3_h", "Volume flow"), ("head_kj_kg", "Polytropic head"), ("eta_p", "Polytropic efficiency"), ("shaft_power_kw", "Shaft power"))], cols, 7)
-            # curves
-            for key, lab in (("converted", "converted to specified conditions"), ("adjusted", "adjusted speed")):
+                         (("qv_m3_h", "Volume flow"), ("head_kj_kg", "Polytropic head"), ("eta_p", "Polytropic efficiency"), ("shaft_power_kw", "Shaft power"))], cols, 6.8)
+
+            # worked example: point nearest the guarantee flow on the rated line
+            ln1 = min(s["lines"], key=lambda l: abs(l["speed_frac"] - 1))
+            okp = [r for r in ln1["results"] if "test" in r]
+            if okp:
+                r = min(okp, key=lambda r: abs(r["converted"]["qv_m3_h"] - sp["qv"] * 3600))
+                rt, rc, o_ = r["test"], r["converted"], r["test"].get("orifice") or {}
+                pt = ln1["readings"][ln1["results"].index(r)]
+                d.page(f"7  {S} data reduction - worked example ({ln1['speed_frac'] * 100:.0f} % line, point {r['point']})")
+                steps = [
+                    ("1 Readings", f"p1 {pt['p1_bara']:.4f} bara, t1 {pt['t1_c']:.2f} C, p2 {pt['p2_bara']:.4f} bara, t2 {pt['t2_c']:.2f} C, N {pt['n_rpm']:.0f} rpm"),
+                    ("2 Orifice (ISO 5167-2)", f"beta {o_.get('beta', 0):.4f}, C {o_.get('C', 0):.5f}, eps {o_.get('eps', 0):.5f}, Re_D {o_.get('Re_D', 0):.3g}, "
+                                              f"dp {o_.get('dp', 0) / 1e3:.3f} kPa, rho {o_.get('rho', 0):.4f} kg/m3" if o_ else "mass flow entered directly"),
+                    ("   m = C E eps (pi/4) d^2 sqrt(2 dp rho)", f"{rt['m_kg_s']:.4f} kg/s (impeller flow {rt['m_imp_kg_s']:.4f} kg/s with balance leakage)"),
+                    ("3 Total conditions h0 = h + c^2/2", f"c1 {rt['c1_m_s']:.2f} m/s -> P01 {rt['P01_bara']:.4f} bara, T01 {rt['T01_c']:.3f} C; "
+                                                         f"c2 {rt['c2_m_s']:.2f} m/s -> P02 {rt['P02_bara']:.4f} bara, T02 {rt['T02_c']:.3f} C"),
+                    ("4 Enthalpy and entropy", f"h1 {rt['h1'] / 1e3:.3f}, h2 {rt['h2'] / 1e3:.3f} kJ/kg; s1 {rt['s1']:.4f}, s2 {rt['s2']:.4f} J/kg K"),
+                    ("5 Polytropic head (" + out["method"].replace("_", "-") + ")", f"Hp = {rt['head_kj_kg']:.3f} kJ/kg"),
+                    ("6 Work input w = dh + Qloss / m", f"{rt['work_kj_kg']:.3f} kJ/kg (Qloss {rt['heat_loss_kw']:.2f} kW)"),
+                    ("7 Polytropic efficiency eta = Hp / w", f"{rt['eta_p'] * 100:.3f} %"),
+                    ("8 Similarity", f"phi {rt['phi']:.5f}, psi {rt['psi']:.4f}, Mm {rt['mach']:.4f}, Rem {rt['reynolds']:.3g}, rv {rt['rv']:.4f}"),
+                    ("9 Speed ratio Nsp / Nt", f"{rc['n_rpm'] / rt['n_rpm']:.5f}"),
+                    ("10 Converted q = qt (Nsp/Nt)", f"{rc['qv_m3_h']:.1f} m3/h"),
+                    ("11 Converted Hp = Hpt (Nsp/Nt)^2", f"{rc['head_kj_kg']:.3f} kJ/kg"),
+                    ("12 Reynolds correction", f"factor {rc['re_factor']:.4f}: eta {rc['eta_test'] * 100:.3f} % -> {rc['eta_p'] * 100:.3f} %"),
+                    ("13 Discharge at specified conditions", f"P2 {rc['P2_bara']:.3f} bara, T2 {rc['T2_c']:.1f} C (polytropic path on the specified gas)"),
+                    ("14 Shaft power = m Hp / eta + mech. losses", f"{rc['gas_power_kw']:.0f} + {rc['mech_loss_kw']:.0f} = {rc['shaft_power_kw']:.0f} kW"),
+                ]
+                d.table(["Step", "Result"], steps, [0.07, 0.4], 7, 90)
+
+            for key, lab in (("converted", "converted to specified conditions"), ("adjusted", "adjusted speed"), ("test", "as tested on the test gas")):
                 if key == "adjusted" and not out["speed_adjust_pct"]:
                     continue
-                d.page(f"Section {sp['section']} - performance curves ({lab})")
-                for j, (q, yl) in enumerate((("head_kj_kg", "Polytropic head (kJ/kg)"), ("eta_p", "Polytropic efficiency (%)"), ("shaft_power_kw", "Shaft power (kW)"))):
-                    ax = d.fig.add_axes([0.1, 0.66 - j * 0.29, 0.84, 0.24])
+                d.page(f"8  {S} performance curves ({lab})")
+                qs = (("head_kj_kg", "Polytropic head (kJ/kg)"), ("eta_p", "Polytropic efficiency (%)"), ("shaft_power_kw", "Shaft power (kW)"), ("P2_bara", "Discharge pressure (bara)"))
+                for j, (q, yl) in enumerate(qs):
+                    if key == "test" and q == "P2_bara":
+                        q, yl = "P02_bara", "Discharge total pressure (bara)"
+                    ax = d.fig.add_axes([0.1 + (j % 2) * 0.45, 0.52 - (j // 2) * 0.42, 0.37, 0.33])
                     for i, ln in enumerate(s["lines"]):
                         c = pal[i % len(pal)]
-                        pr = ln["predicted"]
-                        ys = [p[q] * (100 if q == "eta_p" else 1) for p in pr] if q != "shaft_power_kw" else [p["power_kw"] for p in pr]
-                        ax.plot([p["qv_m3_h"] for p in pr], ys, color=c, lw=1, ls="--", alpha=0.8)
-                        rs = sorted([r[key] for r in ln["results"] if r.get(key)], key=lambda r: r["qv_m3_h"])
-                        if rs:
-                            yv = [r[q] * (100 if q == "eta_p" else 1) for r in rs]
-                            ax.plot([r["qv_m3_h"] for r in rs], yv, "o-", color=c, ms=3.5, lw=1.3, label=f"{ln['speed_frac'] * 100:.0f} % ({rs[0]['n_rpm']:.0f} rpm)")
-                            un = [r["uncertainty_pct"]["eta_p" if q == "eta_p" else ("head_kj_kg" if q == "head_kj_kg" else "shaft_power_kw")]
-                                  for r in sorted([r for r in ln["results"] if r.get(key)], key=lambda r: r[key]["qv_m3_h"])]
-                            ax.fill_between([r["qv_m3_h"] for r in rs], [y * (1 - u_ / 100) for y, u_ in zip(yv, un)], [y * (1 + u_ / 100) for y, u_ in zip(yv, un)],
+                        pr = ln["predicted_test"] if key == "test" else ln["predicted"]
+                        pk_ = "power_kw" if q == "shaft_power_kw" else q
+                        if all(pk_ in p for p in pr):
+                            ax.plot([p["qv_m3_h"] for p in pr], [p[pk_] * (100 if q == "eta_p" else 1) for p in pr], color=c, lw=1, ls="--", alpha=0.8)
+                        rr = sorted([r for r in ln["results"] if r.get(key)], key=lambda r: r[key]["qv_m3_h"])
+                        if rr:
+                            yv = [r[key][q] * (100 if q == "eta_p" else 1) for r in rr]
+                            ax.plot([r[key]["qv_m3_h"] for r in rr], yv, "o-", color=c, ms=3, lw=1.2, label=f"{ln['speed_frac'] * 100:.0f} %")
+                            uk = {"eta_p": "eta_p", "head_kj_kg": "head_kj_kg"}.get(q, "shaft_power_kw")
+                            un = [r["uncertainty_pct"][uk] for r in rr]
+                            ax.fill_between([r[key]["qv_m3_h"] for r in rr], [y * (1 - u_ / 100) for y, u_ in zip(yv, un)], [y * (1 + u_ / 100) for y, u_ in zip(yv, un)],
                                             color=c, alpha=0.12, lw=0)
+                    if key != "test" and s.get("surge_line") and q in ("head_kj_kg", "P2_bara"):
+                        sl = s["surge_line"]
+                        ax.plot([x["qv_m3_h"] for x in sl], [x[q] for x in sl], color="#c0392b", lw=1.2, label="surge line")
                     g = s["acceptance"].get("guarantee_qv_m3_h")
-                    if g:
-                        gy = {"head_kj_kg": sp["head"] / 1e3, "eta_p": sp["eta"] * 100, "shaft_power_kw": sp["power_kw"]}[q]
-                        ax.plot([g], [gy], marker="*", color="#c0392b", ms=10, zorder=5, label="Guarantee point")
-                        if q == "shaft_power_kw":
-                            ax.add_patch(__import__("matplotlib.patches", fromlist=["Rectangle"]).Rectangle((g * 0.99, gy), g * 0.02, gy * 0.04, fc="#c0392b", alpha=0.15))
+                    if g and key != "test":
+                        gy = {"head_kj_kg": sp["head"] / 1e3, "eta_p": sp["eta"] * 100, "shaft_power_kw": sp["power_kw"], "P2_bara": sp["P2"] / 1e5}[q]
+                        ax.plot([g], [gy], marker="*", color="#c0392b", ms=9, zorder=5, label="guarantee")
                     style(ax, "Inlet volume flow (m3/h)", yl)
                     if j == 0:
-                        ax.legend(fontsize=6, frameon=False, ncol=3)
-                d.fig.text(0.1, 0.05, "Dashed: predicted (specified gas). Markers: test converted by similarity. Bands: expanded uncertainty (95 %).",
-                           fontsize=7, color="#5b6878")
+                        ax.legend(fontsize=5.5, frameon=False, ncol=2)
+                d.fig.text(0.1, 0.06, "Dashed: predicted. Markers: test points" + (" converted by similarity" if key != "test" else " on the test gas") +
+                           ". Bands: U95. Red: surge line and guarantee point.", fontsize=7, color="#5b6878")
+
+            d.page(f"9  {S} deviations from prediction and surge line")
+            if s.get("deviation"):
+                d.table(["Line", "Flow m3/h", "Head test / pred", "dev %", "Eff test / pred", "dev pts", "Power test / pred", "dev %", "P2 dev %"],
+                        [(f"{x['speed_frac'] * 100:.0f} %", f(x["qv_m3_h"], 0), f"{x['head_kj_kg']['test']:.1f} / {x['head_kj_kg']['predicted']:.1f}", f(x["head_kj_kg"]["deviation_pct"]),
+                          f"{x['eta_p']['test']:.1f} / {x['eta_p']['predicted']:.1f}", f(x["eta_p"]["test"] - x["eta_p"]["predicted"]),
+                          f"{x['shaft_power_kw']['test']:.0f} / {x['shaft_power_kw']['predicted']:.0f}", f(x["shaft_power_kw"]["deviation_pct"]), f(x["P2_bara"]["deviation_pct"]))
+                         for x in s["deviation"]], [0.07, 0.14, 0.24, 0.39, 0.47, 0.6, 0.68, 0.82, 0.88], 6.6)
+                d.line("At each line's guarantee-equivalent flow q,g (N/Nsp), interpolated on the converted test points and on the predicted curve.", 7.5, "#5b6878")
+            d.heading("Surge line (lowest stable flow per speed line, converted)")
+            d.table(["Line", "Flow m3/h", "Head kJ/kg", "Discharge bara"], [(f"{x['speed_frac'] * 100:.0f} %", f(x["qv_m3_h"], 0), f(x["head_kj_kg"], 1), f(x["P2_bara"], 2))
+                                                                         for x in s.get("surge_line", [])], [0.07, 0.25, 0.45, 0.65])
+
+            acc = s["acceptance"]
+            d.page(f"10  {S} acceptance (API 617) and conclusions")
+            if acc.get("checks"):
+                d.summary([(c["check"].split(" (")[0], f"{c['deviation_pct']:+.2f} %", c["status"]) for c in acc["checks"]])
+                d.table(["Item", "Guarantee", "Test", "Deviation %", "Status"],
+                        [(c["check"], f(c["guarantee"], 1), f(c["test"], 1), f(c["deviation_pct"]), c["status"]) for c in acc["checks"]], [0.07, 0.5, 0.62, 0.74, 0.86], 7)
+                d.line(f"Basis: {acc['basis']} results on the {acc['line'] * 100:.0f} % line, interpolated at the guarantee flow {acc['guarantee_qv_m3_h']:.0f} m3/h.", 7.5, "#5b6878")
+            d.heading("Conclusions")
+            fails = [c["check"] for c in acc.get("checks", []) if c["status"] == "fail"]
+            pts = [r for ln in s["lines"] for r in ln["results"] if "test" in r]
+            concl = [f"The test was run as PTC 10 Type {tt}" + (f" on {'/'.join(s['test_gas'])} at {sel['P1_bara']:.2f} bara and {sel['N_rpm']:.0f} rpm" if tt == 2 else "") +
+                     (", with all similarity and stand limits met." if sel.get("qualified") else ", outside at least one similarity or stand limit: " + sel.get("reason", "")),
+                     f"{sum(r['stable'] for r in pts)} of {len(pts)} points met the stability criteria.",
+                     "The converted performance meets the API 617 acceptance criteria." if not fails else "Not met: " + "; ".join(fails) + ".",
+                     f"Uncertainty (U95) of the efficiency at the guarantee point about {min(r['uncertainty_pct']['eta_p'] for r in pts):.2f} %." if pts else ""]
+            if s.get("simulated"):
+                concl.append("The readings are the simulated example; enter the measured log before issuing the report.")
+            for c in concl:
+                if c:
+                    d.line("- " + c, 8.5)
+
             cd = s["coastdown"]
-            d.page(f"Section {sp['section']} - orifice, gas, coast-down and method")
+            d.page(f"11  {S} flow element, coast-down and computational method")
             st_ = s["setup"]
             d.table(["Flow element (ISO 5167-2, corner taps)", "Value"], [
                 ("Pipe internal diameter D mm", f(st_["orifice_D_m"] * 1e3, 1)), ("Orifice bore d mm", f(st_["orifice_d_m"] * 1e3, 2)),
                 ("Diameter ratio beta", f(st_["beta"], 4)), ("Discharge coefficient", "Reader-Harris/Gallagher, iterated on Re"),
                 ("Expansibility", "eps = 1 - (0.351 + 0.256 b^4 + 0.93 b^8)(1 - (p2/p1)^(1/k))"),
-                ("Inlet / discharge flange ID mm", f"{st_['D1_pipe_m'] * 1e3:.0f} / {st_['D2_pipe_m'] * 1e3:.0f}")], [0.07, 0.55])
-            d.line("Gas analysis: sample before the test, near the guarantee point and before the end; purity >= 98 % for a pure test gas.", 8)
-            d.line(f"Seal gas: primary {s['seal_gas']['primary']}, secondary {s['seal_gas']['secondary']}, buffer {s['seal_gas']['buffer']}.", 8)
-            d.line("Coast-down", 10, bold=True)
+                ("Inlet / discharge flange ID mm", f"{st_['D1_pipe_m'] * 1e3:.0f} / {st_['D2_pipe_m'] * 1e3:.0f}"),
+                ("Balance-piston leakage", f"{st_['balance_leak_pct']:.2f} % of through-flow (returns to suction)"),
+                ("Casing for heat loss D x L m", f"{st_['casing_D_m']:.2f} x {st_['casing_L_m']:.2f}, ambient {st_['t_amb_c']:.0f} C")], [0.07, 0.5], 7)
+            d.line("Coast-down", 10, "#0b5cad", True)
             d.line(f"Predicted coast-down time from {sel['N_rpm']:.0f} rpm (loop vented to about 2 barg): {cd['predicted_s']:.0f} s; "
                    f"train inertia referred to the compressor {cd['inertia_kgm2']:.2f} kg m2; measured {f(cd['measured_s'], 0)} s - {cd['status']}", 8)
-            ax = d.fig.add_axes([0.1, d.y - 0.22, 0.84, 0.2])
+            ax = d.fig.add_axes([0.1, d.y - 0.2, 0.84, 0.18])
             ax.plot([t for t, _ in cd["trace"]], [n for _, n in cd["trace"]], color="#0b5cad", lw=1.3)
-            style(ax, "Time (s)", "Speed (rpm)")
-            d.y -= 0.26
-            d.line("Computational method", 10, bold=True)
+            style(ax, "Time (s)", f"{T['N1']} (rpm)")
+            d.y -= 0.24
+            d.line("Computational method", 10, "#0b5cad", True)
             for t in ("Total conditions from the static flange readings and the pipe velocity head (h0 = h + c^2/2).",
                       "Sandberg-Colby: Hp = (h2 - h1) - (s2 - s1)(T2 - T1)/ln(T2/T1); Schultz and path integration selectable.",
-                      "Work input = enthalpy rise + casing heat loss / mass flow; efficiency = Hp / work.",
-                      "Conversion: eta,co = eta,te; q,co = q,te (N,sp/N,te); Hp,co = Hp,te (N,sp/N,te)^2; P,co = m,co Hp,co / eta,co + mech. losses (N ratio)^2.5.",
-                      "Reynolds-number correction " + ("applied" if out.get("reynolds_correction") else "not applied (Type 2, per contract)") + ".",
+                      "Work input = enthalpy rise + casing heat loss / mass flow (heat loss measured or estimated, h about 9 W/m2K); efficiency = Hp / work.",
+                      "Leakage: impeller flow = orifice flow + balance-piston leakage; power uses the impeller flow; DGS vent leakage reported.",
+                      "Conversion: q,co = q,te (N,sp/N,te); Hp,co = Hp,te (N,sp/N,te)^2; P,co = m,co Hp,co / eta,co + mech. losses (N ratio)^2.5.",
+                      "Reynolds correction (PTC 10): (1 - eta,sp)/(1 - eta,t) = (RA,sp/RA,t)(RB,sp/RB,t), RA = 0.066 + 0.934 (4.8e6 b / Re)^C, C = 0.988 / Re^0.243, "
+                      "RB = log(0.000125 + 13.67/Re) / log(eps + 13.67/Re)" + ("" if out["reynolds_correction"] else " - not applied in this report") + ".",
                       "Uncertainty: RSS of the result sensitivities to the instrument uncertainties (PTC 19.1, 95 %), plus orifice C and method terms."):
-                d.line("- " + t, 8)
+                d.line("- " + t, 7.8)
+
+        d.legend(tag_table(project.test_tags), LEGEND_KEYS, [g for g in GLOSSARY if g[0] in ("PTC 10", "Type 1 / Type 2", "rv", "phi", "psi", "Mm", "Rem", "Hp", "eta p",
+                                                                                             "FE", "ASV", "U95", "DGS", "DE / NDE")])
+        d.signoff((project.test_doc or {}).get("signoff"))
         d.close()
     return buf.getvalue()

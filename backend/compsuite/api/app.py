@@ -573,6 +573,7 @@ class MRTRequest(BaseModel):
     urt: Optional[dict[str, Any]] = None                             # {critical_rpm, amplitudes_um: {V1-X: ...}}
     leak: Optional[dict[str, Any]] = None                            # {test_pressure_barg, readings: [...]}
     options: dict[str, Any] = Field(default_factory=dict)
+    images: dict[str, str] = Field(default_factory=dict)             # report pictures captured in the app (data-URL PNG)
 
 
 def _mrt(req: MRTRequest) -> dict:
@@ -594,15 +595,22 @@ def mrt_pdf(req: MRTRequest):
     from compsuite.testing.mrt import mrt_report
     out = _mrt(req)
     with prism._LOCK:
-        pdf = mrt_report(req.project, out)
+        pdf = mrt_report(req.project, out, req.images)
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{req.project.name.replace(" ", "_")}_MRT.pdf"'})
+
+
+@app.get("/api/test-tags")
+def test_tags():
+    from compsuite.testing.tags import GLOSSARY, tag_table
+    return {"tags": tag_table(), "glossary": GLOSSARY}
 
 
 class PTCRequest(BaseModel):
     project: Project
     options: dict[str, Any] = Field(default_factory=dict)            # test_type, method, selection, speed_adjust_pct, limits ...
     logs: dict[str, Any] = Field(default_factory=dict)               # {section: {"0.900": [readings]}}; empty = simulated example
+    images: dict[str, str] = Field(default_factory=dict)             # report pictures captured in the app (data-URL PNG)
 
 
 _ptc_cache: "OrderedDict[str, dict]" = OrderedDict()
@@ -637,7 +645,7 @@ def ptc10_pdf(req: PTCRequest):
     out, res = _ptc(req)
     comps = test_train(req.project, res, res["casings"][0]["lateral"]["speeds"], {})["components"]
     with prism._LOCK:
-        pdf = ptc10_report(req.project, out, comps)
+        pdf = ptc10_report(req.project, out, comps, req.images)
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{req.project.name.replace(" ", "_")}_PTC10.pdf"'})
 

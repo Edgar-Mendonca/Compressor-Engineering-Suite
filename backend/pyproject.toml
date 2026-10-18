@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "compsuite"
-version = "0.5.1"
+version = "0.5.2"
 description = "CentriForge: open-source integrated compressor engineering, design, simulation and selection suite (preliminary engineering)."
 readme = "README.md"
 requires-python = ">=3.10"

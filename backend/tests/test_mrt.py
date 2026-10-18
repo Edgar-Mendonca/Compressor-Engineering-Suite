@@ -77,3 +77,26 @@ def test_api_and_report():
     assert d["plan"]["duration_min"] > 300 and "along" in d and len(d["along"]["V1-X"]) == len(d["along"]["t_min"])
     pdf = c.post("/api/mrt/report.pdf", json={"project": proj})
     assert pdf.status_code == 200 and pdf.content[:4] == b"%PDF"
+
+
+def test_tags_slow_roll_and_margins(base):
+    from compsuite.testing.tags import tag_names, tag_table
+    p, r, o = base
+    assert tag_names()["V1-X"] == "DE-X" and tag_names({"V1-X": "VE-1001X"})["V1-X"] == "VE-1001X"
+    assert tag_table({"TA1": {"description": "pad 1"}})["TA1"]["description"] == "pad 1"
+    pk = o["prediction"]["probes"]["V1-X"]
+    assert pk["slow_roll"]["amp_um"] > 0 and len(pk["uncomp_1x_um"]) == len(pk["amp_1x_um"])
+    assert all(c["sm_status"] in ("pass", "fail", "review") for c in o["prediction"]["critical_speeds"])
+    assert set(o["prediction"]["orbits"]) == {"V1 MCS", "V1 Trip", "V2 MCS", "V2 Trip"}
+    assert all(v["temp_rise_k"] > 0 for v in o["prediction"]["bearing_oil"].values())
+    assert len(o["variation"]) == 5 and o["instruments"][0]["key"] == "V1-X"
+    checks = {a["check"] for a in o["acceptance"]}
+    assert {"Overspeed trip test", "Dry gas seal primary vent flow", "Critical-speed separation margin"} <= checks
+
+
+def test_input_hash_ignores_report_labels():
+    from compsuite.core.trace import input_hash
+    p = Project()
+    h = input_hash(p)
+    p.test_tags, p.test_doc = {"V1-X": "X1"}, {"number": "D-1"}
+    assert input_hash(p) == h

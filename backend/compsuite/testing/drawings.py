@@ -71,11 +71,11 @@ def train(ax, comps: list[dict], probes: bool = True, y0: float = 4.0) -> dict:
             box(ax, x, y0 + 3, 2.5, 8, 4, "#9aa3ab", z=4)
             box(ax, x + w - 2.5, y0 + 3, 2.5, 8, 4, "#9aa3ab", z=4)
             if probes:
-                for px, tag in ((x + 1.2, "1R1"), (x + w - 1.2, "1R2")):
+                for px, tag in ((x + 1.2, "DE"), (x + w - 1.2, "NDE")):
                     for a, s in ((-1, "X"), (1, "Y")):
                         ax.plot([px, px + a * 2.2], [y0 + 11, y0 + 14.5], color="#2b3440", lw=0.8, zorder=6)
                         ax.add_patch(Circle((px + a * 2.2, y0 + 14.8), 0.55, fc="#2e9e6b", ec="#2b3440", lw=0.4, zorder=7))
-                    ax.text(px, y0 + 17.3, f"{tag}X/Y", fontsize=5, ha="center", color="#0c1a2b", zorder=7)
+                    ax.text(px, y0 + 17.3, f"{tag}-X/Y", fontsize=5, ha="center", color="#0c1a2b", zorder=7)
         anchors.setdefault(k, (x, w))
         ax.text(x + w / 2, y0 - 4.2, c["name"][:26], fontsize=4.8, ha="center", color="#3b4652", rotation=0)
         if c.get("source"):
@@ -111,10 +111,10 @@ def loop(ax, comps, gas: str, sections: int = 1, seal: dict | None = None):
     ax.plot([R, R + 5], [52, 52], color=COL["pipe"], lw=1.4)
     ax.text(R + 5.5, 52, "Vent / anti-surge", fontsize=5, va="center")
     # instruments at the flanges
-    for px, py, tags in ((sx, top - 6, ("PT", "TT")), (dx, top - 6, ("PT", "TT")), (ox + 4, top + 1, ("FT",))):
+    for px, py, tags in ((sx, top - 6, ("PT-S", "TE-S")), (dx, top - 6, ("PT-D", "TE-D")), (ox + 4, top + 1.5, ("dP-FE", "TE-FE"))):
         for i, t in enumerate(tags):
-            ax.add_patch(Circle((px + 2.8 + i * 3, py), 1.25, fc="white", ec="#0b5cad", lw=0.7, zorder=6))
-            ax.text(px + 2.8 + i * 3, py, t, fontsize=4.2, ha="center", va="center", color="#0b5cad", zorder=7)
+            ax.add_patch(Circle((px + 3.2 + i * 4.4, py), 2.0, fc="white", ec="#0b5cad", lw=0.7, zorder=6))
+            ax.text(px + 3.2 + i * 4.4, py, t, fontsize=3.3, ha="center", va="center", color="#0b5cad", zorder=7)
     ax.text(sx, top + 2, "Suction", fontsize=5, ha="center")
     ax.text(dx, top + 2, "Discharge", fontsize=5, ha="center")
     # dry gas seal panel
@@ -138,42 +138,125 @@ def axes(fig, rect):
     return ax
 
 
+STATUS_COL = {"pass": "#1f7a4d", "fail": "#c0392b", "attention": "#a8650c", "review": "#a8650c", "Qualified": "#1f7a4d", "Not qualified": "#c0392b"}
+
+
+def png_bytes(img) -> bytes | None:
+    """PNG bytes from a data URL / base64 string / bytes (the picture captured from the app)."""
+    import base64
+    if not img:
+        return None
+    if isinstance(img, bytes):
+        return img
+    try:
+        return base64.b64decode(img.split(",", 1)[1] if img.startswith("data:") else img)
+    except (ValueError, IndexError):
+        return None
+
+
 class Doc:
-    """A4 portrait pages with a title, wrapped text lines and simple tables."""
+    """A4 portrait report pages: running header, footer with document number and 'page i of n', cover with
+    contents, wrapped text, banded tables, status summary, embedded pictures, legend and sign-off pages.
+    Pages are kept until close() so the page count and the contents are known."""
 
-    def __init__(self, pdf, subtitle: str):
-        self.pdf, self.fig, self.y, self.sub = pdf, None, 0, subtitle
+    def __init__(self, pdf, subtitle: str, doc: dict | None = None):
+        self.pdf, self.fig, self.y, self.sub, self.doc = pdf, None, 0, subtitle, doc or {}
+        self.figs, self.toc, self.cover_fig = [], [], None
 
-    def page(self, title):
+    def _new(self):
         from matplotlib.figure import Figure
-        if self.fig is not None:
-            self.pdf.savefig(self.fig)
         self.fig = Figure(figsize=(8.27, 11.69))
-        self.fig.text(0.07, 0.955, title, fontsize=13, weight="bold", color="#0c1a2b")
-        self.fig.text(0.07, 0.94, self.sub, fontsize=8, color="#5b6878")
-        self.fig.add_artist(Rectangle((0.07, 0.932), 0.86, 0.0012, transform=self.fig.transFigure, color="#0b5cad"))
-        self.y = 0.91
+        self.figs.append(self.fig)
+        return self.fig
+
+    def page(self, title, toc: bool = True):
+        f = self._new()
+        dn = self.doc.get("number") or ""
+        f.add_artist(Rectangle((0, 0.975), 1, 0.025, transform=f.transFigure, color="#0c1a2b"))
+        f.text(0.07, 0.9835, self.doc.get("title") or self.sub, fontsize=7, color="white", va="center")
+        f.text(0.93, 0.9835, f"{dn}  Rev {self.doc.get('rev', '0')}".strip(), fontsize=7, color="white", va="center", ha="right")
+        f.text(0.07, 0.948, title, fontsize=13, weight="bold", color="#0c1a2b")
+        f.text(0.07, 0.933, self.sub, fontsize=7.5, color="#5b6878")
+        f.add_artist(Rectangle((0.07, 0.926), 0.86, 0.0012, transform=f.transFigure, color="#0b5cad"))
+        self.y = 0.905
+        if toc and title != "(continued)":
+            self.toc.append((title, len(self.figs)))
+
+    def cover(self, title: str, info: list[tuple[str, str]], image=None, drawing=None, summary: list[tuple[str, str, str]] | None = None):
+        f = self._new()
+        self.cover_fig = f
+        f.add_artist(Rectangle((0, 0.86), 1, 0.14, transform=f.transFigure, color="#0c1a2b"))
+        f.add_artist(Rectangle((0, 0.855), 1, 0.005, transform=f.transFigure, color="#0b5cad"))
+        f.text(0.07, 0.945, "CentriForge", fontsize=10, color="#9fb7d0", weight="bold")
+        f.text(0.07, 0.905, title, fontsize=20, color="white", weight="bold")
+        f.text(0.07, 0.875, self.sub, fontsize=9, color="#c9d6e3")
+        png = png_bytes(image)
+        if png:
+            from PIL import Image
+            im = Image.open(io.BytesIO(png))
+            ax = f.add_axes([0.05, 0.5, 0.9, 0.34])
+            ax.imshow(im)
+            ax.axis("off")
+        elif drawing:
+            drawing(axes(f, [0.05, 0.53, 0.9, 0.3]))
+        self.y = 0.47
+        for i, (k, v) in enumerate(info):
+            x = 0.07 if i % 2 == 0 else 0.52
+            f.text(x, self.y, k, fontsize=7, color="#5b6878")
+            f.text(x + 0.15, self.y, str(v)[:44], fontsize=7.5, color="#0c1a2b", weight="bold")
+            if i % 2:
+                self.y -= 0.019
+        self.y -= 0.025
+        if summary:
+            self.summary(summary, "Result summary")
+
+    def summary(self, rows: list[tuple[str, str, str]], title: str | None = None):
+        """Status chips: (criterion, value, status)."""
+        if title:
+            self.line(title, 10, bold=True)
+        for i, (k, v, st) in enumerate(rows):
+            x = 0.07 + (i % 2) * 0.44
+            if i % 2 == 0 and self.y < 0.08:
+                self.page("(continued)")
+            c = STATUS_COL.get(st, "#5b6878")
+            self.fig.add_artist(FancyBboxPatch((x, self.y - 0.006), 0.42, 0.022, boxstyle="round,pad=0,rounding_size=0.004",
+                                               transform=self.fig.transFigure, fc="#f4f6f8", ec="#dfe4e8", lw=0.5))
+            self.fig.add_artist(Rectangle((x, self.y - 0.006), 0.006, 0.022, transform=self.fig.transFigure, color=c))
+            self.fig.text(x + 0.012, self.y + 0.001, str(k)[:46], fontsize=6.8, color="#0c1a2b")
+            self.fig.text(x + 0.33, self.y + 0.001, str(v)[:12], fontsize=6.8, color="#3b4652", ha="right")
+            self.fig.text(x + 0.412, self.y + 0.001, str(st).upper(), fontsize=6.3, color=c, weight="bold", ha="right")
+            if i % 2 or i == len(rows) - 1:
+                self.y -= 0.027
+        self.y -= 0.008
 
     def line(self, s, size=8.5, color="#0c1a2b", bold=False, x=0.07, step=0.019):
         for part in textwrap.wrap(s, int(118 * 8.5 / size)) or [""]:
             if self.y < 0.06:
                 self.page("(continued)")
             self.fig.text(x, self.y, part, fontsize=size, color=color, weight="bold" if bold else "normal")
-            self.y -= step
+            self.y -= step * size / 8.5 if size > 8.5 else step
+
+    def heading(self, s):
+        self.y -= 0.006
+        self.line(s, 10, "#0b5cad", True)
 
     def table(self, head, rows, xs, fs=7.5, width=70):
-        for j, h in enumerate(head):
-            self.fig.text(xs[j], self.y, h, fontsize=fs, weight="bold", color="#5b6878")
-        self.y -= 0.017
+        def hdr():
+            self.fig.add_artist(Rectangle((0.065, self.y - 0.005), 0.87, 0.017, transform=self.fig.transFigure, color="#e3eaf2", zorder=0))
+            for j, h in enumerate(head):
+                self.fig.text(xs[j], self.y, h, fontsize=fs, weight="bold", color="#0c1a2b")
+            self.y -= 0.018
+        hdr()
         for i, r in enumerate(rows):
             if self.y < 0.06:
                 self.page("(continued)")
-            if i % 2 == 0:
-                self.fig.add_artist(Rectangle((0.065, self.y - 0.004), 0.87, 0.015, transform=self.fig.transFigure, color="#f1f3f2", zorder=0))
+                hdr()
+            if i % 2 == 1:
+                self.fig.add_artist(Rectangle((0.065, self.y - 0.004), 0.87, 0.015, transform=self.fig.transFigure, color="#f4f6f8", zorder=0))
             for j, v in enumerate(r):
-                col = {"pass": "#1f7a4d", "fail": "#c0392b", "attention": "#a8650c", "review": "#a8650c", "Qualified": "#1f7a4d",
-                       "Not qualified": "#c0392b"}.get(str(v), "#0c1a2b")
-                self.fig.text(xs[j], self.y, str(v)[:width], fontsize=fs, color=col)
+                st = STATUS_COL.get(str(v))
+                self.fig.text(xs[j], self.y, str(v).upper() if st and str(v) in ("pass", "fail", "review", "attention") else str(v)[:width], fontsize=fs,
+                              color=st or "#0c1a2b", weight="bold" if st else "normal")
             self.y -= 0.016
         self.y -= 0.01
 
@@ -186,9 +269,63 @@ class Doc:
         ax.imshow(Image.open(io.BytesIO(png)))
         ax.axis("off")
 
+    def image(self, img, rect) -> bool:
+        png = png_bytes(img)
+        if not png:
+            return False
+        from PIL import Image
+        ax = self.fig.add_axes(rect)
+        ax.imshow(Image.open(io.BytesIO(png)))
+        ax.axis("off")
+        return True
+
     def drawing(self, rect):
         return axes(self.fig, rect)
 
+    def legend(self, table: dict, keys: list[str], glossary: list[tuple[str, str]]):
+        self.page("Legend - instrument tags and abbreviations")
+        self.line("Tags follow API 670 / ISO 20816-1 location naming (probe angles viewed from the driver) and ISA 5.1 letters for process "
+                  "instruments; they can be renamed in the app (Tags & glossary) to match the plant tag list.", 7.5, "#5b6878")
+        self.table(["Tag", "Description", "Unit", "Location"], [(table[k]["tag"], table[k]["description"], table[k]["unit"], table[k]["location"]) for k in keys if k in table],
+                   [0.07, 0.2, 0.62, 0.71], 6.8, 64)
+        self.heading("Abbreviations")
+        self.table(["Term", "Meaning"], glossary, [0.07, 0.22], 6.8, 96)
+
+    def signoff(self, names: dict | None = None, roles=("Prepared - vendor test engineer", "Checked - vendor QA / QC", "Witnessed - purchaser inspector",
+                                                       "Witnessed - third-party inspector", "Approved - purchaser")):
+        self.page("Sign-off")
+        self.line("The undersigned confirm that the test was carried out as described in this report and that the results are recorded correctly.", 8)
+        self.y -= 0.02
+        for r in roles:
+            nm = (names or {}).get(r.split(" - ")[0].lower(), "")
+            self.fig.add_artist(Rectangle((0.07, self.y - 0.06), 0.86, 0.075, transform=self.fig.transFigure, fc="none", ec="#9aa3ab", lw=0.6))
+            self.fig.text(0.08, self.y, r, fontsize=8, weight="bold", color="#0c1a2b")
+            for x, lab in ((0.08, "Name"), (0.42, "Signature"), (0.74, "Date")):
+                self.fig.text(x, self.y - 0.045, lab, fontsize=6.5, color="#5b6878")
+                self.fig.add_artist(Rectangle((x + 0.06, self.y - 0.047), 0.22 if x < 0.7 else 0.12, 0.0008, transform=self.fig.transFigure, color="#9aa3ab"))
+            if nm:
+                self.fig.text(0.145, self.y - 0.04, nm, fontsize=8, color="#0c1a2b")
+            self.y -= 0.095
+
     def close(self):
-        if self.fig is not None:
-            self.pdf.savefig(self.fig)
+        n = len(self.figs)
+        if self.cover_fig is not None and self.toc:
+            # contents page right after the cover
+            items = [(t, pg + 1) for t, pg in self.toc]
+            self.page("Contents", toc=False)
+            f = self.figs.pop()
+            self.figs.insert(1, f)
+            y = 0.89
+            for t, pg in items:
+                if y < 0.06:
+                    break
+                f.text(0.08, y, t, fontsize=8.5, color="#0c1a2b", weight="bold" if t[:2].strip().isdigit() else "normal")
+                f.text(0.92, y, str(pg), fontsize=8.5, color="#5b6878", ha="right")
+                f.add_artist(Rectangle((0.08, y - 0.005), 0.84, 0.0006, transform=f.transFigure, color="#e3e7ea"))
+                y -= 0.024
+            n = len(self.figs)
+        for i, f in enumerate(self.figs):
+            f.add_artist(Rectangle((0.07, 0.035), 0.86, 0.0008, transform=f.transFigure, color="#9aa3ab"))
+            f.text(0.07, 0.022, f"{self.doc.get('client') or ''}  {self.doc.get('equipment') or ''}".strip() or "CentriForge test report", fontsize=6.5, color="#5b6878")
+            f.text(0.93, 0.022, f"Page {i + 1} of {n}", fontsize=6.5, color="#5b6878", ha="right")
+            self.pdf.savefig(f)

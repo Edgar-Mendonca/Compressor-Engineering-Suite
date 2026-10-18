@@ -328,7 +328,7 @@ def unbalance_response(model: RotorModel, speeds_rad: np.ndarray, unbalances: li
     M, Ks, Gm = structural or model.assemble_structural()
     if basis is not None:
         Mr, Ksr, Gr = basis.T @ M @ basis, basis.T @ Ks @ basis, basis.T @ Gm @ basis
-    resp = {p: {"major_um": [], "x_amp_um": [], "x_phase_deg": [], "y_amp_um": []} for p in probes}
+    resp = {p: {"major_um": [], "x_amp_um": [], "x_phase_deg": [], "y_amp_um": [], "y_phase_deg": []} for p in probes}
     shapes = []
     for w in speeds_rad:
         Kb, Cb = model.support_matrices(float(w), extra)
@@ -353,6 +353,7 @@ def unbalance_response(model: RotorModel, speeds_rad: np.ndarray, unbalances: li
             resp[p]["x_amp_um"].append(float(abs(x[k]) * 1e6))
             resp[p]["x_phase_deg"].append(float(np.degrees(np.angle(x[k]))))
             resp[p]["y_amp_um"].append(float(abs(y[k]) * 1e6))
+            resp[p]["y_phase_deg"].append(float(np.degrees(np.angle(y[k]))))
     return {"speeds_rpm": (np.asarray(speeds_rad) * 60 / (2 * math.pi)).tolist(),
             "probes": {f"{p:.4f}": v for p, v in resp.items()}, "deflected_shapes_um": shapes,
             "z_m": model.nodes.tolist()}

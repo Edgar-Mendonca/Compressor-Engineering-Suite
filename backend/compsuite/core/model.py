@@ -10,7 +10,7 @@ Units are carried in field names (bara, degC, mm, kg, rpm ...).
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -455,6 +455,8 @@ class Project(BaseModel):
     casing_material: str = "ASTM A350 LF2"
     material_assessment: MaterialAssessment = Field(default_factory=MaterialAssessment)
     impeller_vendor: list[ImpellerVendor] = Field(default_factory=list, description="Optional vendor impeller data (overrides estimates)")
+    test_tags: dict[str, Any] = Field(default_factory=dict, description="User instrument tags for the shop test pages and reports (key -> tag or {tag, description})")
+    test_doc: dict[str, Any] = Field(default_factory=dict, description="Test report document data: number, revision, client, equipment tag, sign-off names")
 
     def design_case(self) -> OperatingCase:
         for c in self.cases:

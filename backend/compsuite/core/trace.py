@@ -45,8 +45,14 @@ def jsonable(obj: Any) -> Any:
     return obj
 
 
+REPORT_ONLY = ("test_tags", "test_doc")   # project fields that only label reports; they do not change results
+
+
 def input_hash(inputs: Any) -> str:
-    payload = json.dumps(jsonable(inputs), sort_keys=True, default=str)
+    data = jsonable(inputs)
+    if isinstance(data, dict):
+        data = {k: v for k, v in data.items() if k not in REPORT_ONLY}
+    payload = json.dumps(data, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 

@@ -6,6 +6,8 @@ import { NewProject } from "./NewProject";
 import { bridge, onToast, openProject, recent, saveProject, type Toast } from "./files";
 import { STEPS, TutorialCard } from "./Tutorial";
 import * as P from "./pages/Pages";
+/** Project inputs that change results (report labels such as test tags and document data excluded). */
+const runKey = (p: Json) => JSON.stringify(p ? { ...p, test_tags: undefined, test_doc: undefined } : p);
 
 // Heavy pages load on first use so the app starts quickly.
 const ImpellerFEAPage = lazy(() => import("./pages/ImpellerFEA").then((m) => ({ default: m.ImpellerFEAPage })));
@@ -73,7 +75,7 @@ export default function App() {
     try {
       const r = await api.run(p, "full", ac.signal);
       setResults(r);
-      setRanWith(JSON.stringify(p));
+      setRanWith(runKey(p));
       setCasing(0);
     } catch (e) {
       if (!ac.signal.aborted) setError((e as Error).message);
@@ -134,9 +136,9 @@ export default function App() {
     resumeName: draft?.name ?? "",
   };
 
-  const stale = useMemo(() => !!results && JSON.stringify(project) !== ranWith, [project, results, ranWith]);
+  const stale = useMemo(() => !!results && runKey(project) !== ranWith, [project, results, ranWith]);
   const ctx: P.Ctx = { schema, project, setProject, results, casing, setCasing, run, running, savedId, setSavedId,
-    setResults: (r: Json, p: Json) => { setResults(r); setRanWith(JSON.stringify(p)); } };
+    setResults: (r: Json, p: Json) => { setResults(r); setRanWith(runKey(p)); } };
   const current = MODULES.find((m) => m.id === page);
   const open = (id: string) => { setPage(id); document.querySelector("main")?.scrollTo(0, 0); };
 

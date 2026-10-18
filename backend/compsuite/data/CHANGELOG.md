@@ -3,6 +3,14 @@
 Release notes shown on the launcher. Newest first. Releases are published
 from version tags (vX.Y.Z) with a Windows installer attached.
 
+## 0.5.2 - 2026-10-18
+- Generic instrument tags and legend instead of a vendor's naming: radial probes DE-X / DE-Y / NDE-X / NDE-Y (45 deg from top dead centre viewed from the driver, API 670 / ISO 20816), axial AX-A / AX-B, keyphasor KPH, bearing TE-DE / TE-NDE / TE-TA / TE-TI, lube oil TE-LO-IN / PT-LO-IN, seal gas FT-SG-DE / FT-SG-NDE, process PT-S / TE-S / PT-D / TE-D / dP-FE, speed SE, power JT. Every tag and description can be renamed on the new "Tags & glossary" tab (saved with the project) and the pages, live tags and reports follow; glossary of abbreviations included
+- Reports rebuilt as professional documents: cover with the 2.5D picture from the app and a result summary, contents page, running header and footer with document number, revision and "page i of n", banded tables, legend page and sign-off page (document number, client, equipment tag and sign-off names entered in the app)
+- Mechanical running test: slow-roll runout and compensated / uncompensated Bode, orbits at MCS and trip, shaft centreline, critical speeds with AF and API 617 separation margins, sub-synchronous screening, bearings and oil (loads, film, oil flow, temperature rise), lube-oil variation test table, 15-min log with seal vent flows and drain temperatures, overspeed trip test, instrument list with calibration, deviations, inspection findings; more acceptance checks (oil temperature rise, seal vent flow, trip test, separation margin)
+- Mechanical running test animation: keyphasor, axial probes, dry gas seal panel with seal gas and vent flows, live tags for vibration, bearing, drain, seal gas, oil and speed
+- Performance test animation rebuilt as the full test sequence on a timeline (play, pause, speed, scrub, jump to a speed line): charging, start-up, mechanical run, each point throttled, stabilised and recorded, surge approach with the anti-surge valve, venting and coast-down; live tags on the loop, stability checklist with timer, recorded points, live test map, efficiency, power and fluctuation charts
+- Performance test results: PTC 10 Reynolds-number correction (RA / RB), balance-piston and seal leakage, estimated casing heat loss, mechanical losses, stability check per point, work coefficient, similarity per point against its equivalent specified point, discharge pressure curve, surge line, deviation from prediction per speed line, gas composition and properties, worked data-reduction example, conclusions
+
 ## 0.5.1 - 2026-10-18
 - Fixed the desktop app freezing ("Not responding"), slow loading and the need to restart: on every page load the window bridge exposed the native window object, and pywebview's scan of it waited on the window itself (a deadlock). The bridge now exposes only its file functions; the page API is ready in milliseconds
 
