@@ -195,7 +195,7 @@ class Doc:
             from PIL import Image
             im = Image.open(io.BytesIO(png))
             ax = f.add_axes([0.05, 0.5, 0.9, 0.34])
-            ax.imshow(im)
+            ax.imshow(im, interpolation="none")
             ax.axis("off")
         elif drawing:
             drawing(axes(f, [0.05, 0.53, 0.9, 0.3]))
@@ -266,7 +266,7 @@ class Doc:
         from compsuite.reporting.prism import render
         png = render(spec, {"width_in": w, "height_in": h, "font_size": 9}, "png", dpi=160)["content"]
         ax = self.fig.add_axes(rect)
-        ax.imshow(Image.open(io.BytesIO(png)))
+        ax.imshow(Image.open(io.BytesIO(png)), interpolation="none")
         ax.axis("off")
 
     def image(self, img, rect) -> bool:
@@ -275,7 +275,7 @@ class Doc:
             return False
         from PIL import Image
         ax = self.fig.add_axes(rect)
-        ax.imshow(Image.open(io.BytesIO(png)))
+        ax.imshow(Image.open(io.BytesIO(png)), interpolation="none")
         ax.axis("off")
         return True
 

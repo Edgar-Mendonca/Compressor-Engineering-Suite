@@ -126,7 +126,18 @@ def _free_port() -> int:
 def _server_main(port: int) -> None:
     """Child process: the engineering server. Heavy analyses here never block the window's UI thread."""
     if FROZEN and sys.stdout is None:
-        sys.stdout = sys.stderr = open(data_dir() / "server.log", "a", buffering=1, encoding="utf-8")
+        log = data_dir() / "server.log"
+        mode = "w" if log.exists() and log.stat().st_size > 5_000_000 else "a"   # keep the log small
+        sys.stdout = sys.stderr = open(log, mode, buffering=1, encoding="utf-8")
+    import multiprocessing as mp
+    import os
+
+    def orphan_guard():  # the window process is gone (crash, kill): do not linger as an orphan engine
+        parent = mp.parent_process()
+        while parent is None or parent.is_alive():
+            time.sleep(2.0)
+        os._exit(0)
+    threading.Thread(target=orphan_guard, daemon=True).start()
     import uvicorn
     from compsuite.api.app import app
     uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", log_config=None)).run()
@@ -163,9 +174,11 @@ def _serve(port: int, process: bool = False):
 
 def _watchdog(state: dict, window) -> None:
     """Restart a crashed server and reload the page; close the app when the server exits cleanly (update install)."""
-    while True:
+    while not state.get("closing"):
         time.sleep(1.0)
         proc = state.get("server")
+        if state.get("closing"):
+            return
         if proc is None or proc.is_alive():
             continue
         if proc.exitcode == 0:
@@ -193,13 +206,23 @@ def selftest() -> int:
     _, url = _serve(_free_port())
     page = urllib.request.urlopen(url + "/").read()
     assert b"<div id=\"root\">" in page, "frontend not bundled"
+    # The desktop app runs the engine in a child process: start it, stop it the way the app does on close.
+    state = {"server": _serve(_free_port(), process=True)[0]}
+    shutdown(state)
+    assert not state["server"].is_alive(), "engine process did not stop"
     print(f"{APP_NAME} {__version__} selftest ok: {res['summary']['checklist']}")
     return 0
 
 
 def main() -> int:
     import multiprocessing
-    multiprocessing.freeze_support()  # frozen build: the server child re-enters here
+    import os
+    try:
+        multiprocessing.freeze_support()  # frozen build: the server child re-enters here
+    except OSError:
+        # A server child whose parent window already closed cannot attach to it (WinError 87): exit quietly
+        # instead of showing the "unhandled exception" dialog.
+        os._exit(0)
     if FROZEN and sys.stdout is None:  # windowed build: keep a log instead of a console
         sys.stdout = sys.stderr = open(data_dir() / "centriforge.log", "w", buffering=1, encoding="utf-8")
     if "--selftest" in sys.argv:
@@ -234,10 +257,17 @@ def main() -> int:
         webbrowser.open(url)
         while True:
             time.sleep(3600)
+    shutdown(state)
+    return 0
+
+
+def shutdown(state: dict) -> None:
+    """Stop the watchdog first (so it does not restart the engine during exit), then the engine process."""
+    state["closing"] = True
     proc = state.get("server")
     if proc is not None and proc.is_alive():
         proc.terminate()
-    return 0
+        proc.join(5)
 
 
 if __name__ == "__main__":

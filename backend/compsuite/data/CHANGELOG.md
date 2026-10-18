@@ -3,6 +3,12 @@
 Release notes shown on the launcher. Newest first. Releases are published
 from version tags (vX.Y.Z) with a Windows installer attached.
 
+## 0.5.4 - 2026-10-18
+- Fixed the "Unhandled exception in script - WinError 87" dialog: on closing the app the watchdog restarted the engine process while the window process was exiting; the watchdog now stops first, the engine exits quietly if its parent has gone, and the release self-test starts and stops the engine process the way the app does
+- Report pictures are sharp and on a white background: the captured 2.5D drawings keep their colours (theme gradients resolved) at high resolution and are embedded in the PDF without resampling
+- Torsional report: the train model drawing (mass-elastic stations, coupling springs, gear mesh, station numbers) is shown again
+- Code clean-up (unused code removed), the engine log is kept small, README rewritten with every module, the workflows, the reports and the release plan
+
 ## 0.5.3 - 2026-10-18
 - Shop test illustrations redrawn as one shared 2.5D test train for the MRT and the PT (lube console, VFD, motor, LS / HS couplings with guards, gearbox with toothed gears, compressor with DE / NDE housings and flanged nozzles, seal gas panel), oil and seal-gas lines with flow arrows; the PT adds the closed loop (gas cooler, flow element spool, gas charging, control valve with anti-surge bypass) with red / blue gas flow; instruments can be shown or hidden; the same pictures go into the reports
 - Lateral: minimum / average / maximum bearing clearance and oil inlet temperature cases (optionally the two mixed cases), labyrinth and balance-drum seal coefficients in the response model, flexible bearing supports (series stiffness / damping), response curves at every close-clearance station, rotor-weight check against the drawing, bearing make / model

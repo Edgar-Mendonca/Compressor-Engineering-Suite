@@ -321,7 +321,7 @@ def stability_report(project, res: dict, casing: int = 0) -> bytes:
     from matplotlib.backends.backend_pdf import PdfPages
     cas = res["casings"][casing]
     L = cas["lateral"]
-    S, st = L["stability_api617"], L["stability"]
+    S = L["stability_api617"]
     sp = L["speeds"]
     info = doc_info(project, "Stability analysis report")
     l1, l2 = S["level1"], S["level2"]
@@ -562,26 +562,42 @@ def torsional_report(project, res: dict) -> bytes:
 
 
 def train_drawing(ax, model: dict):
-    """Mass-elastic schematic: inertia discs (area ~ Ip^0.4) on shaft springs, gear mesh, station numbers."""
-    from matplotlib.patches import FancyBboxPatch
+    """Mass-elastic model: one disc per station (height ~ Ip^0.35), shaft stiffness between stations, couplings as
+    springs, the gear mesh between the bull gear and pinion lines, station numbers below, components above."""
+    from matplotlib.patches import Circle, FancyBboxPatch
     st = model["stations"]
-    x, pos, prev = [], 0.0, None      # evenly spaced stations, a gap between rotors
+    x, pos, prev = [], 0.0, None      # evenly spaced stations, a wider gap between components
     for s_ in st:
-        pos += 100.0 if prev is None else (100.0 if s_["rotor"] == prev else 220.0)
+        pos += 1.0 if prev is None or s_["rotor"] == prev else 1.8
         x.append(pos)
         prev = s_["rotor"]
     x = np.asarray(x)
-    ip = np.asarray([max(s["ip_kgm2"], 1e-6) for s in st])
-    h = 0.25 + 0.75 * (ip / ip.max()) ** 0.4
-    ax.plot(x, np.zeros_like(x), color="#5b6878", lw=1.5, zorder=1)
+    ip = np.asarray([max(float(s_.get("ip_kgm2") or 0), 1e-9) for s_ in st])
+    h = 0.18 + 0.82 * (ip / ip.max()) ** 0.35
+    ax.set_aspect("auto")
     cols = {}
-    for i, s in enumerate(st):
-        c = cols.setdefault(s["rotor"], PAL[len(cols) % 6])
-        ax.add_patch(FancyBboxPatch((x[i] - 22, -h[i]), 44, 2 * h[i], boxstyle="round,pad=0,rounding_size=3", fc=c, ec="#2b3440", lw=0.4, zorder=2))
-        ax.text(x[i], -1.25, str(s["station"]), fontsize=4.5, ha="center", color="#5b6878")
+    for i, s_ in enumerate(st):
+        c = cols.setdefault(s_["rotor"], PAL[len(cols) % 6])
+        if i:
+            same = st[i - 1]["rotor"] == s_["rotor"]
+            x0, x1 = x[i - 1] + 0.18, x[i] - 0.18
+            mesh = not same and ("Pinion" in s_["rotor"] or "Bull" in st[i - 1]["rotor"])
+            if not same and not mesh:   # couplings join the components: draw their stiffness as a spring
+                zz = np.linspace(x0, x1, 11)
+                ax.plot(zz, [0.0 if k in (0, 10) else (0.18 if k % 2 else -0.18) for k in range(11)], color="#5b6878", lw=1.0, zorder=1)
+            elif mesh:
+                ax.add_patch(Circle(((x0 + x1) / 2 - 0.12, 0), 0.32, fc="none", ec="#c0392b", lw=1.1))
+                ax.add_patch(Circle(((x0 + x1) / 2 + 0.2, 0), 0.18, fc="none", ec="#c0392b", lw=1.1))
+                ax.text((x0 + x1) / 2, -0.62, "mesh", fontsize=5, ha="center", color="#c0392b")
+            else:
+                ax.plot([x0, x1], [0, 0], color="#5b6878", lw=2.2, solid_capstyle="butt", zorder=1)
+        ax.add_patch(FancyBboxPatch((x[i] - 0.17, -h[i]), 0.34, 2 * h[i], boxstyle="round,pad=0,rounding_size=0.06", fc=c, ec="#1f2a35", lw=0.5, zorder=2))
+        ax.text(x[i], -1.2, str(s_["station"]), fontsize=5, ha="center", color="#3b4652")
     for r, c in cols.items():
-        xs = [x[i] for i, s in enumerate(st) if s["rotor"] == r]
-        ax.text(np.mean(xs), 1.2, r[:22], fontsize=5.5, ha="center", color=c, weight="bold")
-    ax.set_xlim(x.min() - 40, x.max() + 40)
-    ax.set_ylim(-1.6, 1.6)
+        xs = [x[i] for i, s_ in enumerate(st) if s_["rotor"] == r]
+        ax.plot([min(xs) - 0.25, max(xs) + 0.25], [1.12, 1.12], color=c, lw=1.2)
+        ax.text(np.mean(xs), 1.22, r[:24], fontsize=6.2, ha="center", va="bottom", color=c, weight="bold")
+    ax.text(x.min() - 0.4, -1.55, "Disc height ~ station inertia; zigzag = coupling stiffness; circles = gear mesh; numbers = stations", fontsize=5.2, color="#5b6878")
+    ax.set_xlim(x.min() - 0.6, x.max() + 0.6)
+    ax.set_ylim(-1.7, 1.6)
     ax.axis("off")

@@ -400,7 +400,7 @@ def _decimate(a, n=800):
 
 def analyse(train: Train, meta: dict, s: Settings) -> dict:
     md = modes(train, meta, s.n_modes)
-    G, c = md["G"], stress_factor(train)
+    c = stress_factor(train)
     rated = {ln: 9549 * s.rated_power_kw / rpm for ln, (_, rpm) in s.lines.items()}  # N m at each line's speed
     al = {n: shear_allowables(r["material"], **s.allow) for n, r in meta["rotors"].items() if r["kind"] == "rotor"}
     cpl = {"mean_factor": s.cpl_mean_factor, "sf_min": s.cpl_sf_min}

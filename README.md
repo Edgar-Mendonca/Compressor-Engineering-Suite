@@ -39,6 +39,8 @@ Process → Thermodynamics → Selection & aerodynamics → Impellers → Rotor 
 
 - [Feature status](#feature-status)
 - [Quick start](#quick-start)
+- [Modules and workflows](#modules-and-workflows)
+- [Reports](#reports)
 - [Example result](#example-result)
 - [How it works](#how-it-works)
 - [Validation](#validation)
@@ -54,24 +56,21 @@ Process → Thermodynamics → Selection & aerodynamics → Impellers → Rotor 
 
 | Area | ✅ Available now | 🚧 Yet to build | 💡 Possible extensions |
 |---|---|---|---|
-| **Thermodynamics** | 19-component mixtures; Peng–Robinson (built in) or CoolProp; Z, ρ, h, s, cp/cv, sound speed, viscosity; dew/bubble points, phase envelope, water dew point; property charts | Thermal conductivity and other transport properties; direct GERG-2008; hydrate formation | Cantera transport properties; user-defined pseudo-components (C7+); REFPROP adapter |
-| **Compression** | Real-gas polytropic path, isentropic and Schultz (ASME PTC 10); head, power, efficiency; efficiency back-calculated from test temperature; flow-unit conversions | Full ASME PTC 10 test evaluation (similarity, Mach/Re corrections) | ccp (Petrobras) adapter for test evaluation and curve conversion |
-| **Selection & aerodynamics** | Type screening; stages, sections, intercooling, casings; speed and D2; φ/ψ, Ns/Ds; stage-by-stage design; stage-stacked map with surge/stonewall; variable/fixed-speed operating points; surge margin | Mean-line stage model (generic stage curves today); Mach-number effects on curves; side-streams; inlet guide vanes | TurboFlow or h2iCompressor mean-line engine; vendor stage-curve import; CFD-ready blade export |
-| **Impellers & FEA** | Geometry estimate, slip and work coefficient, mass/inertia, axial thrust; rotating-disk FE; **axisymmetric impeller FEA** (hub, smeared blades, shroud; centrifugal + thermal; MCS and 115 % overspeed; eye/tip growth) validated against CalculiX; **interactive 3D FEA viewer** (stress/displacement contours, deformed shape, cut-away, mesh, blades) and meridional section plot | 3D blade and shroud stress (cyclic sector); impeller modal (blade/disk) analysis; shrink-fit contact | Parametric 3D impeller CAD with blades; Campbell/SAFE diagram for impellers; fatigue (Goodman) maps from FEA |
-| **Rotor & shaft** | Parametric stepped shaft or user geometry; balance piston from thrust; collar, couplings, sleeves; mass/CG/inertia; bending/torque diagrams; Kt, Marin, DE-Goodman fatigue; transient-torque yield; sag and stiffness | Shrink-fit and keyway stresses under impellers; thermal bow | Interactive drag-and-drop shaft editor in the browser |
-| **Bearings** | Plain and tilting-pad journals (Reynolds, pad equilibrium); K and C vs speed; film thickness; losses; oil flow; thrust-bearing sizing | Thermal (THD/TEHD) temperature model; finite-length bearings; frequency-reduced pad coefficients; thrust-bearing film model | Import of vendor bearing coefficient tables; magnetic bearings |
-| **Seals** | Labyrinth and balance-piston leakage; modified-Wachel cross-coupling; dry-gas-seal leakage and supply; dew-point margin along the JT expansion path | Bulk-flow dynamic coefficients for labyrinth, hole-pattern and damper seals; seal-gas filter sizing | Full API 692 seal-gas panel sizing; oil-film seal model |
-| **Lateral rotordynamics** | Timoshenko FE with gyroscopics; Campbell; whirl direction; mode shapes and 3D animation; undamped critical-speed map; unbalance response; AF; API 617-style separation and amplitude checks; Level I stability (Qa, Q0) | Level II stability with seal/impeller coefficients; pedestal and casing flexibility | Time-domain transient response; magnetic-bearing control loop |
-| **Torsional** | Driver–coupling–gearbox–compressor train; modes; interference diagram; separation checks; forced response; synchronous-motor start-up transient; torsional fatigue | Air-gap torque from drive data; short-circuit transients; branched trains | openTorsion adapter; VFD interharmonic analysis |
-| **Structural FEA** | Rotating-disk FE; CalculiX beam and axisymmetric input decks (exported and run when `ccx` is installed) | 3D impeller and casing FEA; structural optimisation | Code_Aster adapter; automatic meshing from the STEP model |
-| **Lube oil & auxiliaries** | Oil flow from losses; pump, cooler (LMTD) and reservoir sizing; oil viscosity vs temperature | Pressure-drop network; accumulator and rundown tank; control-oil system | Full API 614 oil-console sizing with P&ID-style report |
-| **Piping & flow** | NPS sizing on velocity and ρv²; Colebrook; compressible pressure drop; IEC 60534 recycle valve; ISO 5167 orifice; system curve | Pulsation and acoustics; dynamic anti-surge simulation | Anti-surge controller tuning; full process-loop simulation |
-| **Material assessment** | 14-material database with temperature derating; **stage-by-stage sour/wet assessment** from the compressor design (pH₂S, pCO₂, water dew point, wet/dry, estimated condensed-water pH, illustrative SSC domain, de Waard–Milliams CO₂ corrosion vs allowance, settle-out case); **per-component records of documented limits and evidence** with verdicts (outside limits / evidence needed / within limits) feeding the checklist | Certified data sources; buffered-pH and scale-corrected corrosion models; impact-test rules | Sour-service qualification workflow with document attachments; corrosion-under-insulation and erosion checks |
-| **Optimisation** | Parametric studies; normalised sensitivities; constrained COBYLA; configuration comparison; Pareto filter | Gradient-based multidisciplinary optimisation; multi-start/global search | OpenMDAO integration; design-of-experiments and surrogate models |
-| **Verification** | Checklist of every module's checks (pass, fail, attention, qualified review) with references; versioned criteria object | Edition-specific criteria files reviewed by a qualified engineer; API 618, 614 and 692 detail | Sign-off workflow with reviewer comments |
-| **Reports & data** | Datasheet; HTML and PDF reports; Excel workbook; JSON; STL and STEP; CalculiX decks; project revisions and calculation history | Word export; API datasheet form layout | Report templates per company; comparison report of several designs |
-| **Platform** | Windows desktop app with installer and one-click updates; launcher; Python + FastAPI backend; React + TypeScript app; SQLite storage; JSON project files; CLI; CI and release builds | User accounts and access control; background job queue for long studies | Docker image and one-click deploy; multi-project dashboards; macOS/Linux installers; code-signed installer |
-| **Machine types** | Centrifugal compressors (API 617 scope) | Reciprocating (API 618) and screw compressors | Axial compressors; pumps and steam turbines on the same rotordynamics core |
+| **Thermodynamics** | 19-component mixtures (plus R134a); Peng–Robinson (built in) or CoolProp; Z, ρ, h, s, cp/cv, sound speed, viscosity; dew/bubble points, phase envelope, water dew point; property charts | Thermal conductivity; direct GERG-2008; hydrate formation | Cantera transport properties; C7+ pseudo-components; REFPROP adapter |
+| **Compression** | Real-gas polytropic path, isentropic, Schultz and Sandberg-Colby (ASME PTC 10); head, power, efficiency; efficiency from test temperatures; flow-unit conversions | Side-stream sections in the test evaluation | ccp (Petrobras) adapter |
+| **Selection & aerodynamics** | Type screening; stages, sections, intercooling, casings; speed and D2; φ/ψ, Ns/Ds; stage-by-stage design; stage-stacked map with surge/stonewall; operating points; surge margin | Mean-line stage model; Mach effects on curves; inlet guide vanes | TurboFlow / h2iCompressor mean-line engine; vendor stage-curve import |
+| **Impellers & FEA** | Geometry, velocity triangles, slip, thrust; axisymmetric FEA validated against CalculiX; **3D cyclic-sector FEA** (centrifugal, pressure, thermal, shrink fit; elastic-plastic 115 % overspeed; modes / SAFE; Goodman and LCF fatigue); 3D viewer | Blade flutter / aero-elastic forcing | Parametric impeller CAD; CFD-ready blade export |
+| **Rotor & shaft** | Stepped shaft or user geometry; balance drum from thrust; collar, couplings, sleeves; mass / CG / inertia; bending and torque; Kt, Marin, Goodman fatigue; sag and stiffness | Shrink-fit and keyway stresses under impellers; thermal bow | Drag-and-drop shaft editor |
+| **Bearings & seals** | Plain and tilting-pad journals (Reynolds, pad equilibrium, pivot stiffness); K and C vs speed; film, losses, oil flow; thrust sizing; labyrinth and balance-drum leakage and bulk-flow dynamic coefficients; dry-gas-seal leakage and conditioning | THD / TEHD bearing temperatures; hole-pattern and honeycomb damper seals | Vendor coefficient import; magnetic bearings |
+| **Lateral & stability** | Timoshenko FE with gyroscopics; Campbell; undamped critical speed map with min / avg / max bearing stiffness; **min / average / max bearing clearance and oil temperature cases**; seal coefficients and flexible supports in the model; API 617-2022 unbalance cases, AF / SM, Scc and 75 % clearance check at every station; deflected shapes; screening (Level I) with QA, sensitivity and screening chart; Level II log decrement vs speed at min / max seal clearance | Support mass (pedestal modes); damper seals | Time-domain transients; magnetic-bearing control loop |
+| **Torsional** | Motor–coupling–gearbox–compressor train from vendor or estimated data; modes and shapes; Campbell (speed ratio and absolute); API 617 separation; steady-state resonant stresses; coupling Goodman (API 671); VSD harmonics over the acceleration; 2- and 3-phase short circuit with breaker clearing time; Miner fatigue; torque reversal | Branched trains; DOL induction-motor start with slip-dependent air-gap torque | Coupled lateral–torsional analysis of geared trains |
+| **Shop testing** | Balancing and overspeed; **mechanical running test** (API 617 8.3.2 / 8.3.3: train, speed-time plan with oil sequences, predicted Bode / polar / orbits / centreline, slow-roll compensation, 15-min log, acceptance, URT, trip test, gas leak test, inspection); **performance test to ASME PTC 10** (Type 1 / Type 2, every test-gas combination screened, ISO 5167 orifice, corrections, uncertainty, API 617 acceptance); animated 2.5D test train and loop | Field (site) performance test | Live data acquisition from shop DAQ files |
+| **Material assessment** | 14-material database; stage-by-stage sour / wet assessment (pH₂S, pCO₂, water dew point, pH, SSC domain, CO₂ corrosion, settle-out); per-component evidence records | Certified data sources | Sour-service qualification workflow |
+| **Lube oil & piping** | Oil flow, pump, cooler, reservoir; NPS sizing, pressure drop, recycle valve, orifice | Pressure-drop network; pulsation; dynamic anti-surge | API 614 console sizing; anti-surge controller tuning |
+| **Optimisation & verification** | Parametric studies, sensitivities, constrained optimisation, configuration comparison; checklist of every module's checks with references | Multi-start global search; edition-specific criteria files | OpenMDAO; sign-off workflow |
+| **Reports & data** | Datasheet; calculation report (HTML / PDF); **lateral, stability, torsional, mechanical running test and performance test reports**; Excel, JSON, STL, STEP, CalculiX decks; project revisions | Word export; API datasheet form layout | Company templates; design comparison report |
+| **Platform** | Windows desktop app with installer and one-click updates; engine in its own process (no UI freezes); launcher; FastAPI + React; JSON project files; CLI; CI and release builds with a self-test | User accounts | Docker image; macOS / Linux installers; code-signed installer |
+| **Machine types** | Centrifugal compressors (API 617 scope) | Reciprocating (API 618) and screw compressors | Axial compressors; pumps and steam turbines on the same core |
 
 ## Quick start
 
@@ -142,9 +141,64 @@ compsuite run project.json --out results  # report.html, report.pdf, results.xls
 **Frontend development** with hot reload: run `compsuite serve`, then `npm run dev` in `frontend/` and open
 `http://127.0.0.1:5173`.
 
+## Modules and workflows
+
+The launcher lists the modules in engineering order. Each module reads the shared project model and the results of
+the last **Run analysis**; inputs changed afterwards are flagged until the next run.
+
+| Group | Module | What you do there |
+|---|---|---|
+| Inputs | Design basis · Gas & operating cases | Driver, speed range, margins; gas composition and every operating case |
+| Process & aero | Thermodynamics · Selection & performance | Properties and phase envelope; type, stages, casings, map, operating points |
+| Materials | Material assessment | Sour / wet service per stage, corrosion, per-component evidence |
+| Impeller | Impeller design · Impeller FEA validation | Geometry and velocity triangles; 3D FEA, overspeed, modes, fatigue |
+| Rotor & mechanical | Rotor, shaft & thrust · Bearings & seals · Shop tests | Shaft and thrust; bearing and seal design (incl. bearing cases, supports, seals in the lateral model); balancing and overspeed |
+| Rotordynamics | Lateral & stability · Torsional train | API 617 lateral, stability and torsional analyses and their reports |
+| Testing | Mechanical running test · Performance test (PTC 10) | Plan, animate, log and evaluate the shop tests; reports |
+| Systems | Lube oil & piping | Console and piping sizing |
+| Evaluate & report | Optimisation · Verification · Reports & projects | Studies, the full checklist, exports and saved revisions |
+
+**Typical workflow: design study**
+
+1. *Start page → New project* (or open the export-gas example) and fill in **Design basis** and **Gas & operating cases**.
+2. **Run analysis** (top right). The run takes about 20 s for the example; the engine runs in its own process, so the window stays responsive.
+3. Walk the modules in order; fix what the **Verification** checklist flags (fail / attention / review) and run again.
+4. Download the calculation report and the analysis reports from **Reports & projects**, **Lateral & stability** and **Torsional train**.
+
+**Workflow: rotordynamics review (API 617)**
+
+1. In **Bearings & seals** set the bearing data (make / model, clearance tolerance, oil temperature range, pivot stiffness), the
+   bearing case set (min / avg / max or all five), support stiffness and whether seals enter the lateral model; enter the drawing rotor weight.
+2. Run, then check **Lateral & stability**: critical speed map, unbalance cases, AF / SM, clearance check, Level I / II stability.
+3. In **Torsional train** enter coupling, gear and motor data, VSD harmonics, the short-circuit clearing time and the number of events.
+4. Download the **Lateral**, **Stability** and **Torsional analysis reports**.
+
+**Workflow: shop tests**
+
+1. **Mechanical running test**: review the train and the speed-time plan, play the animated test, enter (or import) the
+   15-min log, coast-down points, URT readings, trip speed and the gas leak test, then download the MRT report.
+2. **Performance test (PTC 10)**: choose Type 1 or Type 2, pick a test gas from the screened combinations (CO₂ preset), play the
+   animated test sequence, enter or import the readings, check similarity, stability, curves and the API 617 acceptance, then download the PT report.
+3. On either page, **Tags & glossary** renames instruments to your plant tag list and holds the document number, client and sign-off names.
+
+## Reports
+
+All reports are A4 PDFs in one style: a cover with the 2.5D picture (test reports) and a result summary, contents, a running
+header and footer with document number, revision and "page i of n", scope, references and assumptions, results, conclusions,
+appendices, a legend of tags and abbreviations, and a sign-off page.
+
+| Report | Where | Contents |
+|---|---|---|
+| Calculation report | Reports & projects | Every module's inputs, results, checks and traceability |
+| Lateral analysis | Lateral & stability | Data, rotor model with node numbers, bearing and seal coefficients, critical speed map, mode shapes, Campbell, unbalance response per case, AF / SM, deflected shapes, clearance check, URT check point |
+| Stability analysis | Lateral & stability | QA per impeller, screening with sensitivity and screening chart, Kirk-Donald point, Level II log decrement and seal coefficients |
+| Torsional analysis | Torsional train | Train model, natural frequencies and shapes, Campbell (ratio and absolute), separation margins, steady-state, VSD and short-circuit results, fatigue |
+| Mechanical running test | Mechanical running test | Set-up, instruments and calibration, plan, oil sequences, trend, Bode / polar / orbits, criticals, spectra, bearings and oil, acceptance, URT and trip test, log, leak test, inspection, deviations |
+| Performance test | Performance test (PTC 10) | Scope and gases, set-up and instruments, test design and screening, similarity and stability per point, data reduction, corrections, curves with surge line, deviations, acceptance and conclusions |
+
 ## Example result
 
-The built-in example is a 60 kg/s natural-gas compressor raising 30 bara to 90 bara on a variable-speed motor. One
+The built-in export-gas example is a 60 kg/s natural-gas compressor raising 30 bara to 90 bara on a variable-speed motor. One
 full run gives:
 
 | Result | Value |
@@ -232,21 +286,23 @@ packaging/          desktop app bundle (PyInstaller), Windows installer (Inno Se
 
 | Version | Theme | Main content |
 |---|---|---|
-| **0.2.0** ✅ | Standalone app | CentriForge name and logo, Windows installer, launcher page, one-click updates, new UI |
-| **0.3.0** ✅ | Start page, charts, materials | Fast start, start page (new project, examples, tutorial), GraphPad Prism-style charts with editor and exports, rebuilt material assessment with material selection report |
-| **0.4.0** ✅ | Impeller FEA Pro, shop tests, files | 3D cyclic-sector impeller FEA (loads, plastic overspeed, modes/SAFE, fatigue, viewer, exports), API 617 shop-test simulator with animations, rotor thrust, Save As and project files |
-| 0.5.0 | Performance and testing | Stage loss models, multistage matching, PTC 10 field and shop test analysis, troubleshooting (handbook ch. 3–4) |
-| 0.6.0 | Anti-surge and control | Control line, recycle valve sizing, multistage anti-surge law, trip transients |
-| 0.7.0 | Bearings, seals and lube | THD bearings, thrust bearing design, seal selection, API 614 systems |
-| 0.8.0 | Reciprocating compressors | API 618 cylinders, valves, rod load, packing, PV diagnostics, pulsation |
-| 0.9.0 / 1.0.0 | Screw and PD types; plant level | API 619 screw, lobe, diaphragm; foundations, packaging, drivers, life-cycle cost |
+| **0.2 – 0.4** ✅ | Platform, materials, impeller FEA | Desktop app, installer, updates, launcher, charts, material assessment, 3D impeller FEA, shop-test simulator |
+| **0.5.0** ✅ | Performance testing | ASME PTC 10 module, MRT live charts, engine in its own process |
+| **0.5.1** ✅ | Stability | Desktop freeze fixed |
+| **0.5.2** ✅ | Test reports | Generic instrument tags, professional MRT / PT reports, full PTC 10 corrections, test-sequence animation |
+| **0.5.3** ✅ | Rotordynamics reports | Shared 2.5D illustration, min / avg / max bearing cases, seals and supports in the lateral model, lateral / stability / torsional reports |
+| **0.5.4** ✅ | Quality | Start-up error on close fixed, sharp report pictures, torsional model drawing, self-test of the engine process, README |
+| 0.6.0 | CFD-lite and anti-surge | Mean-line / CFD-ready export, control line, recycle valve sizing, anti-surge law, trip transients |
+| 0.7.0 | Bearings, seals and lube | THD bearings, damper seals, thrust bearing film, API 614 systems |
+| 0.8.0 | Reciprocating compressors | API 618 cylinders, valves, rod load, packing, pulsation |
+| 0.9.0 / 1.0.0 | Screw and PD types; plant level | API 619, foundations, packaging, life-cycle cost |
 
 The release notes are in [backend/compsuite/data/CHANGELOG.md](backend/compsuite/data/CHANGELOG.md); the
-launcher shows them too. Section-by-section detail against the original proposal is in [docs/ROADMAP.md](docs/ROADMAP.md).
+launcher shows them too.
 
 **Publishing a release** (maintainers): set `__version__` and `RELEASE_DATE` in `backend/compsuite/__init__.py`, the
-version in `backend/pyproject.toml`, add a CHANGELOG section, rebuild `frontend/dist`, then
-`git tag vX.Y.Z && git push origin vX.Y.Z` (or *Actions → Release → Run workflow*). The *Release* workflow builds, self-tests and publishes the installer;
+version in `backend/pyproject.toml` and `frontend/package.json`, add a CHANGELOG section, rebuild `frontend/dist`, then run
+*Actions → Release → Run workflow* (publish = true). The workflow builds, self-tests (including the engine process) and publishes the installer;
 installed apps then offer the update.
 
 ## Contributing

@@ -75,7 +75,7 @@ export function Summary({ rows }: { rows: [string, string, string][] }) {
 }
 
 /** Rasterise an on-screen SVG (light theme, computed styles inlined) to a PNG data URL for the PDF reports. */
-export async function svgToPng(svg: SVGSVGElement | null, width = 2000): Promise<string | undefined> {
+export async function svgToPng(svg: SVGSVGElement | null, width = 3200): Promise<string | undefined> {
   if (!svg) return undefined;
   const root = document.documentElement, prev = root.dataset.theme;
   root.dataset.theme = "light";
@@ -85,8 +85,12 @@ export async function svgToPng(svg: SVGSVGElement | null, width = 2000): Promise
     const PROPS = ["fill", "stroke", "stroke-width", "stroke-dasharray", "opacity", "fill-opacity", "stroke-opacity", "font-family", "font-size", "font-weight", "letter-spacing", "text-anchor"];
     const inline = (a: Element, b: Element) => { const cs = getComputedStyle(a); (b as SVGElement).setAttribute("style", PROPS.map((p) => `${p}:${cs.getPropertyValue(p)}`).join(";")); };
     inline(svg, clone);
-    src.forEach((el, i) => { if (!(el instanceof SVGStopElement)) inline(el, dst[i]); });
-    const bg = getComputedStyle(svg).backgroundColor;
+    src.forEach((el, i) => {
+      if (el instanceof SVGStopElement) {   // gradient stops may use theme variables: resolve them too
+        const cs = getComputedStyle(el);
+        (dst[i] as SVGElement).setAttribute("style", `stop-color:${cs.getPropertyValue("stop-color")};stop-opacity:${cs.getPropertyValue("stop-opacity")}`);
+      } else inline(el, dst[i]);
+    });
     const vb = svg.viewBox.baseVal, h = Math.round(width * vb.height / vb.width);
     clone.setAttribute("width", String(width)); clone.setAttribute("height", String(h)); clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
     clone.querySelectorAll(".blink").forEach((e) => e.classList.remove("blink"));
@@ -94,7 +98,7 @@ export async function svgToPng(svg: SVGSVGElement | null, width = 2000): Promise
     const img = new Image();
     await new Promise<void>((ok, bad) => { img.onload = () => ok(); img.onerror = () => bad(new Error("render")); img.src = url; });
     const c = document.createElement("canvas"); c.width = width; c.height = h;
-    const g = c.getContext("2d")!; g.fillStyle = bg && bg !== "rgba(0, 0, 0, 0)" ? bg : "#ffffff"; g.fillRect(0, 0, width, h); g.drawImage(img, 0, 0);
+    const g = c.getContext("2d")!; g.fillStyle = "#ffffff"; g.fillRect(0, 0, width, h); g.drawImage(img, 0, 0);
     URL.revokeObjectURL(url);
     return c.toDataURL("image/png");
   } catch { return undefined; } finally { if (prev === undefined) delete root.dataset.theme; else root.dataset.theme = prev; }
