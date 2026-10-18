@@ -293,6 +293,22 @@ def undamped_critical_speed_map(model: RotorModel, k_values: np.ndarray, n_modes
     return {"k_n_m": list(map(float, k_values)), "critical_speeds_rpm": out}
 
 
+def undamped_modes(model: RotorModel, k_bearing: float, n_modes: int = 4, structural: tuple | None = None) -> list[dict]:
+    """Non-rotating undamped modes (one plane) with isotropic bearing stiffness k_bearing (N/m)."""
+    M, Ks, _ = structural or model.assemble_structural()
+    ix = np.sort(np.r_[np.arange(0, model.ndof, 4), np.arange(1, model.ndof, 4)])
+    K = Ks[np.ix_(ix, ix)].copy()
+    for b in (s for s in model.supports if s.kind == "bearing"):
+        K[2 * model.node_at(b.z), 2 * model.node_at(b.z)] += k_bearing
+    w2, v = linalg.eigh(K, M[np.ix_(ix, ix)], subset_by_index=[0, n_modes - 1])
+    out = []
+    for j in range(n_modes):
+        x = v[0::2, j]
+        x = x / x[np.argmax(np.abs(x))]
+        out.append({"freq_rpm": float(np.sqrt(max(w2[j], 0.0)) * 30 / math.pi), "shape": x.tolist()})
+    return out
+
+
 def static_deflection(model: RotorModel, omega: float = 0.0) -> dict:
     """Gravity sag on the bearing direct stiffnesses at speed omega."""
     M, Ks, _ = model.assemble_structural()

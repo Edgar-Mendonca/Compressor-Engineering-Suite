@@ -464,9 +464,18 @@ def _fea(req: FEARequest) -> tuple[dict, dict]:
     st = next(s for s in res["sizing"]["stages"] if s["index"] == imp["index"])
     key = hashlib.sha1(json.dumps([input_hash(req.project), req.casing, req.impeller, req.opts], sort_keys=True, default=str).encode()).hexdigest()
     if key not in _fea_cache:
-        opts = {"bore_mm": cas["rotor"]["shaft_diameter_impellers_m"] * 1e3, **req.opts}
-        _fea_cache[key] = analyse(imp, st, cas["_imp_mat"], cas["lateral"]["speeds"], opts)
-        while len(_fea_cache) > 4:
+        opts = {"bore_mm": imp.get("bore_mm") or cas["rotor"]["shaft_diameter_impellers_m"] * 1e3, **req.opts}
+        r = analyse(imp, st, cas["_imp_mat"], cas["lateral"]["speeds"], opts)
+        axi = next((a for a in (cas.get("impeller_fea") or {}).get("impellers", []) if a["impeller"] == r["impeller"]), None)
+        if axi:  # 2D axisymmetric (smeared blades) vs 3D sector
+            s3 = r["summary"]
+            r["validation"]["axi_vs_3d"] = {"vm_mcs_2d_mpa": axi["max_vm_mcs_mpa"], "vm_mcs_3d_mpa": s3["peak_vm_mcs_mpa"],
+                                            "hoop_mcs_2d_mpa": axi["max_hoop_mcs_mpa"], "hoop_mcs_3d_mpa": s3["peak_hoop_mcs_mpa"],
+                                            "tip_growth_2d_um": axi["tip_radial_growth_um"],
+                                            "tip_growth_3d_um": float(r["_fields"]["Centrifugal MCS"]["ur_um"].max())}
+        r["_group"] = (input_hash(req.project), req.casing, json.dumps(req.opts, sort_keys=True, default=str))
+        _fea_cache[key] = r
+        while len(_fea_cache) > 10:
             _fea_cache.popitem(last=False)
     return _fea_cache[key], cas
 
@@ -488,9 +497,33 @@ def fea3d_export(fmt: Literal["vtu", "inp", "pdf"], req: FEARequest):
         return Response(I.to_calculix(r, cas["_imp_mat"], cas["lateral"]["speeds"]["mcs_rpm"]), media_type="text/plain",
                         headers={"Content-Disposition": f'attachment; filename="{name}_ccx.inp"'})
     from compsuite.structural.impeller3d_report import fea_report
+    others = sorted((I.summary_row(v) for v in _fea_cache.values() if v.get("_group") == r.get("_group")), key=lambda q: q["impeller"])
     with prism._LOCK:
-        pdf = fea_report(req.project, r)
+        pdf = fea_report(req.project, r, others)
     return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}_fea.pdf"'})
+
+
+class FEABatchRequest(BaseModel):
+    project: Project
+    casing: int = 0
+    impellers: Optional[list[int]] = None          # 0-based within the casing; None = all
+    opts: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/api/fea3d/batch")
+def fea3d_batch(req: FEABatchRequest):
+    """Summary rows of the 3D FEA for several impellers (the client calls one impeller at a time for progress)."""
+    from compsuite.structural.impeller3d import summary_row
+    res = _run_cached(req.project, "full")
+    try:
+        n = len(res["casings"][req.casing]["impellers"]["impellers"])
+    except (IndexError, KeyError) as exc:
+        raise HTTPException(404, "No such casing") from exc
+    idx = req.impellers if req.impellers is not None else list(range(n))
+    if any(i < 0 or i >= n for i in idx):
+        raise HTTPException(404, "No such impeller")
+    rows = [summary_row(_fea(FEARequest(project=req.project, casing=req.casing, impeller=i, opts=req.opts))[0]) for i in idx]
+    return jsonable({"rows": rows, "qualified": all(r["qualified"] for r in rows)})
 
 
 class ShopTestRequest(BaseModel):
@@ -530,6 +563,40 @@ def shoptest(req: ShopTestRequest):
         pred = {"Bore": s["permanent_bore_growth_um"], "Eye": s["permanent_eye_growth_um"], "Tip": s["permanent_tip_growth_um"]}
     out["overspeed"] = T.overspeed_record(pred, req.overspeed_measured, req.overspeed_allowable_um)
     return jsonable(out)
+
+
+class MRTRequest(BaseModel):
+    project: Project
+    casing: int = 0
+    log: list[dict[str, Any]] = Field(default_factory=list)          # log sheet rows (N1, V1-X ... TA1 ... seq)
+    coastdown: list[dict[str, Any]] = Field(default_factory=list)    # [{speed_rpm, probe, amp_um, phase_deg}]
+    urt: Optional[dict[str, Any]] = None                             # {critical_rpm, amplitudes_um: {V1-X: ...}}
+    leak: Optional[dict[str, Any]] = None                            # {test_pressure_barg, readings: [...]}
+    options: dict[str, Any] = Field(default_factory=dict)
+
+
+def _mrt(req: MRTRequest) -> dict:
+    from compsuite.testing.mrt import mrt_analysis
+    res = _cache.get(f"{input_hash(req.project)}:full") or _run_cached(req.project, "fast")   # reuse a full run if cached
+    if not 0 <= req.casing < len(res["casings"]):
+        raise HTTPException(422, "No such casing")
+    return mrt_analysis(req.project, res, req.casing, req.log, req.coastdown, req.urt, req.leak, req.options)
+
+
+@app.post("/api/mrt")
+def mrt(req: MRTRequest):
+    return jsonable(_mrt(req))
+
+
+@app.post("/api/mrt/report.pdf")
+def mrt_pdf(req: MRTRequest):
+    from compsuite.reporting import prism
+    from compsuite.testing.mrt import mrt_report
+    out = _mrt(req)
+    with prism._LOCK:
+        pdf = mrt_report(req.project, out)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{req.project.name.replace(" ", "_")}_MRT.pdf"'})
 
 
 # ---------------------------------------------------------------- charts

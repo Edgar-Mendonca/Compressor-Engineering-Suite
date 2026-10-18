@@ -4,16 +4,18 @@ import { Launcher } from "./Launcher";
 import { GROUPS, MODULES, num } from "./modules";
 import { NewProject } from "./NewProject";
 import { bridge, onToast, openProject, recent, saveProject, type Toast } from "./files";
+import { ImpellerFEAPage } from "./pages/ImpellerFEA";
+import { MechRunTestPage } from "./pages/MechRunTest";
 import { ShopTestsPage } from "./pages/ShopTests";
 import { STEPS, TutorialCard } from "./Tutorial";
 import * as P from "./pages/Pages";
 
 const RENDER: Record<string, (c: P.Ctx) => JSX.Element> = {
   project: (c) => <P.ProjectPage {...c} />, gas: (c) => <P.GasCasesPage {...c} />, thermo: (c) => <P.ThermoPage {...c} />,
-  compressor: (c) => <P.CompressorPage {...c} />, impellers: (c) => <P.ImpellerPage {...c} />, rotor: (c) => <P.RotorPage {...c} />,
+  compressor: (c) => <P.CompressorPage {...c} />, impellers: (c) => <P.ImpellerPage {...c} />, impfea: (c) => <ImpellerFEAPage {...c} />, rotor: (c) => <P.RotorPage {...c} />,
   bearings: (c) => <P.BearingsSealsPage {...c} />, lateral: (c) => <P.LateralPage {...c} />, torsional: (c) => <P.TorsionalPage {...c} />,
   materials: (c) => <P.MaterialsPage {...c} />, aux: (c) => <P.AuxPage {...c} />, optimize: (c) => <P.OptimizePage {...c} />,
-  shoptest: (c) => <ShopTestsPage {...c} />, verify: (c) => <P.VerificationPage {...c} />, reports: (c) => <P.ReportsPage {...c} />,
+  shoptest: (c) => <ShopTestsPage {...c} />, mrt: (c) => <MechRunTestPage {...c} />, verify: (c) => <P.VerificationPage {...c} />, reports: (c) => <P.ReportsPage {...c} />,
 };
 
 const DRAFT_KEY = "compsuite.draft.v1";

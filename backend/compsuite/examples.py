@@ -10,7 +10,20 @@ from compsuite.core.model import GasComposition, OperatingCase, Project
 
 
 def export_gas() -> Project:
-    return Project()
+    """Reference case: VFD induction motor (4-pole, about 74 Hz at rated speed) + parallel-shaft gearbox + compressor,
+    tilting-pad bearings with min/max clearance cases, swirl-braked balance piston."""
+    p = Project()
+    p.cases[2].flow_value = 44.0  # turndown kept above the surge-margin limit (recycle handles lower flows)
+    p.design_basis.driver_type = "vfd_motor"
+    p.shaft.impeller_material = "Alloy 718"  # 17-4PH H1150 is above yield at MCS for 277 m/s tip speed
+    t = p.train
+    t.motor_poles, t.pinion_teeth, t.bull_gear_teeth = 4, 26, 177  # ratio 6.81
+    t.gear_module_mm, t.gear_pressure_angle_deg, t.gear_helix_angle_deg = 6.5, 22.5, 25.0
+    t.gear_ratio = 177 / 26
+    b = p.bearings
+    b.oil_grade, b.oil_supply_temperature_c, b.preload, b.length_to_diameter = "ISO VG 46", 50.0, 0.45, 0.3
+    p.seals.swirl_brakes, p.seals.balance_piston_swirl_brake = True, True  # swirl brakes on eye seals and piston
+    return p
 
 
 def sour_reinjection() -> Project:
@@ -29,9 +42,11 @@ def sour_reinjection() -> Project:
         ],
     )
     # Heavy, wet sour gas: lower tip speed and Mach limits keep inlet Mach and impeller stress acceptable.
-    p.design_basis.max_tip_speed_m_s = 240.0
+    p.design_basis.max_tip_speed_m_s = 225.0
     p.design_basis.max_machine_mach = 0.8
-    p.design_basis.max_impellers_per_casing = 6
+    p.design_basis.min_operating_speed_pct = 80.0  # reinjection: narrow speed range keeps the 1st critical clear
+    p.seals.balance_piston_teeth = 24  # longer piston keeps leakage under 3 % at the higher casing-2 pressure ratio
+    p.design_basis.max_impellers_per_casing = 5  # keeps bearing span / shaft diameter near 11
     return p
 
 

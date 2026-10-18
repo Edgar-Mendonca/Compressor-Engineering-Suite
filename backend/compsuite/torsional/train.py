@@ -30,6 +30,9 @@ class Station:
     name: str
     inertia: float  # kg m2 at its own speed
     ratio: float = 1.0  # own speed / compressor speed
+    rotor: str = ""
+    x_m: float = 0.0
+    direction: int = 1  # -1 for shafts counter-rotating relative to the reference
 
 
 @dataclass
@@ -39,20 +42,32 @@ class Shaft:
     ratio: float = 1.0
     diameter: float = 0.1  # for stress
     endurance_shear_mpa: float | None = None
+    rotor: str = ""
+    kind: str = "shaft"  # shaft / coupling / mesh
+    inner_diameter: float = 0.0
+    length: float = 0.0
+    i: int | None = None  # end stations (default: chain i, i+1)
+    j: int | None = None
 
 
 @dataclass
 class Train:
     stations: list[Station]
-    shafts: list[Shaft]  # shaft i connects station i and i+1
+    shafts: list[Shaft]  # shaft k connects stations (i, j), default (k, k+1)
+
+    def __post_init__(self):
+        for k, sh in enumerate(self.shafts):
+            if sh.i is None:
+                sh.i, sh.j = k, k + 1
 
     def matrices(self):
         n = len(self.stations)
         J = np.diag([s.inertia * s.ratio**2 for s in self.stations])
         K = np.zeros((n, n))
-        for i, sh in enumerate(self.shafts):
+        for sh in self.shafts:
             k = sh.stiffness * sh.ratio**2
-            K[i:i + 2, i:i + 2] += k * np.array([[1, -1], [-1, 1]])
+            ix = np.ix_([sh.i, sh.j], [sh.i, sh.j])
+            K[ix] += k * np.array([[1, -1], [-1, 1]])
         return J, K
 
 
@@ -63,7 +78,7 @@ def natural_frequencies(train: Train, n_modes: int = 6) -> dict:
     modes = []
     for j in range(1, min(len(w), n_modes + 1)):  # skip rigid-body mode
         v = vec[:, j] / np.max(np.abs(vec[:, j]))
-        twist = [float(v[i + 1] - v[i]) for i in range(len(v) - 1)]
+        twist = [float(v[sh.j] - v[sh.i]) for sh in train.shafts]
         modes.append({"freq_hz": float(w[j] / (2 * math.pi)), "freq_cpm": float(w[j] * 60 / (2 * math.pi)),
                       "shape": v.tolist(), "shaft_twist": twist,
                       "dominant_shaft": train.shafts[int(np.argmax(np.abs(twist)))].name})
@@ -132,9 +147,9 @@ def forced_response(train: Train, nat_modes: int, speeds_rpm: np.ndarray, torque
             fj = phi[:, j] @ F
             denom = wj**2 - w**2 + 2j * zeta * wj * w
             q += phi[:, j] * fj / denom if abs(denom) > 1e-12 else 0
-        for i, sh in enumerate(train.shafts):
+        for sh in train.shafts:
             # Dynamic torque at the shaft's own speed.
-            T_ref = sh.stiffness * sh.ratio**2 * (q[i + 1] - q[i])
+            T_ref = sh.stiffness * sh.ratio**2 * (q[sh.j] - q[sh.i])
             out[sh.name].append(float(abs(T_ref) / sh.ratio))
     return {"speeds_rpm": list(map(float, speeds_rpm)), "order": order, "dynamic_torque_nm": out}
 
@@ -176,8 +191,8 @@ def startup_transient(train: Train, rated_torque: float, sync_rpm_comp: float, l
     th = sol.y[:n]
     om = sol.y[n:]
     shaft_t = {}
-    for i, sh in enumerate(train.shafts):
-        shaft_t[sh.name] = (sh.stiffness * sh.ratio**2 * (th[i + 1] - th[i]) / sh.ratio).tolist()
+    for sh in train.shafts:
+        shaft_t[sh.name] = (sh.stiffness * sh.ratio**2 * (th[sh.j] - th[sh.i]) / sh.ratio).tolist()
     step = max(1, len(t) // 1500)
     return {"t_s": t[::step].tolist(), "speed_rpm": (om[0][::step] * 60 / (2 * math.pi)).tolist(),
             "shaft_torque_nm": {k: v[::step] for k, v in shaft_t.items()},
@@ -185,116 +200,296 @@ def startup_transient(train: Train, rated_torque: float, sync_rpm_comp: float, l
             "acceleration_time_s": t_acc}
 
 
+def _mat(shaft_material: dict, yield_mpa=None, uts_mpa=None) -> dict:
+    m = {k: shaft_material[k] for k in ("shear_modulus_pa", "density_kg_m3", "yield_mpa", "uts_mpa", "endurance_mpa")}
+    if yield_mpa:
+        m["yield_mpa"] = yield_mpa
+    if uts_mpa:
+        m["uts_mpa"], m["endurance_mpa"] = uts_mpa, 0.5 * uts_mpa
+    return m
+
+
+def _els(rows) -> list:
+    from compsuite.torsional.api617 import Element
+    mm = lambda v: None if v is None else v / 1e3
+    return [Element(r.length_mm / 1e3, r.od_mm / 1e3, r.id_mm / 1e3, mm(r.od_mass_mm), mm(r.id_mass_mm), r.added_ip_kgm2,
+                    r.core, r.mesh, label=r.label) for r in rows]
+
+
+def _d_end(torque):
+    return (16 * torque / (math.pi * 40e6)) ** (1 / 3)  # 40 MPa nominal shear at rated torque
+
+
+def compressor_elements(rotor: dict) -> list:
+    """Torsional elements of the compressor rotor from the rotor sections; impeller,
+    balance piston, collar and sleeve inertias added at their stations (coupling
+    half excluded: the coupling inertia is split over the hubs)."""
+    from compsuite.torsional.api617 import Element
+    secs = rotor["sections"]
+    masses = [m for m in rotor["masses"] if m["kind"] != "coupling"]
+    zs = sorted({round(float(z), 6) for s in secs for z in (s["z0_m"], s["z1_m"])} | {round(float(m["z_m"]), 6) for m in masses})
+    els = []
+    for a, b in zip(zs[:-1], zs[1:]):
+        zm = 0.5 * (a + b)
+        s = next((s for s in secs if s["z0_m"] <= zm <= s["z1_m"]), secs[-1])
+        here = [m for m in masses if abs(m["z_m"] - a) < 1e-6]
+        els.append(Element(b - a, s["od_m"], s["id_m"], added_ip=float(sum(m["ip_kgm2"] for m in here)),
+                           excite=any(m["kind"] == "impeller" for m in here), label=s["label"]))
+    return els
+
+
+def _coupling(c, T, d_shaft, G, pf, ip_def=None, k_def=None):
+    """Coupling data; estimates: Ip 2.5e-5 (1.5 T)^0.9, body stiffness 100 x continuous rating (1.5 T) in series
+    with pf x hub length (= shaft diameter) of shaft on each side (API 671 penetration)."""
+    ip = (c.ip_kgm2 if c else None) or ip_def or 2.5e-5 * (1.5 * T) ** 0.9
+    k = (c.stiffness_nm_rad if c else None) or k_def
+    if not k:
+        k = 1 / (1 / (100 * 1.5 * T) + 2 * pf * d_shaft / (G * math.pi * d_shaft**4 / 32))
+    t_max = (c.max_transient_torque_nm if c else None) or 5.0 * T
+    t_alt = (c.allowable_alternating_torque_nm if c else None) or 0.15 * t_max
+    return ip, k, t_max, t_alt
+
+
 def build_train(project, rotor: dict, sizing: dict, shaft_material: dict) -> Train:
-    """Assemble the default train from the design: driver, coupling(s), optional gearbox, compressor stations."""
-    tr = project.train
-    P = sizing["driver_rating_kw"] * 1e3  # W
+    """Assemble the train: driver (VFD / fixed-speed motor or turbine), coupling(s), optional bull gear / pinion,
+    compressor rotor from its shaft sections. Vendor station tables replace the estimates when supplied.
+    The returned Train carries `meta` (component bookkeeping) and `info` (speeds, gear data)."""
+    from compsuite.torsional.api617 import CouplingPart, Element, MeshPart, RotorPart, build
+    tr, db = project.train, project.design_basis
     N_c = sizing["speed_rpm"]
-    gr = tr.gear_ratio
+    teeth = bool(tr.pinion_teeth and tr.bull_gear_teeth)
+    gr = tr.bull_gear_teeth / tr.pinion_teeth if teeth else tr.gear_ratio
+    geared = teeth or abs(gr - 1.0) > 1e-6
     N_d = N_c / gr
-    T_c = sizing["shaft_power_kw"] * 1e3 / (N_c * math.pi / 30)
-    J_drv = tr.driver_inertia_kgm2 or 0.04 * (P / 1e3) * (1500.0 / N_d) ** 2
-    # Flexible disc coupling estimates scaled on 1.5 x rated torque (replace with vendor data).
-    T_couple = T_c * 1.5
-    k_cpl = tr.coupling_torsional_stiffness_nm_rad or 1500.0 * T_couple
-    J_cpl = tr.coupling_inertia_kgm2 or 2.5e-5 * T_couple**0.9
-    G = shaft_material["shear_modulus_pa"]
-
-    def driver_shaft(torque, ratio, name, length=0.5):
-        d = (16 * torque / (math.pi * 40e6)) ** (1 / 3)  # 40 MPa nominal shear
-        return Shaft(name, G * math.pi * d**4 / 32 / length, ratio, d)
-
-    stations = [Station("Driver rotor", J_drv, 1 / gr)]
-    shafts = []
-    if abs(gr - 1.0) > 1e-6:
-        T_ls = T_c * gr
-        stations += [Station("LS coupling (driver half)", J_cpl * gr**0.5, 1 / gr),
-                     Station("Bull gear", tr.gear_inertia_low_kgm2, 1 / gr),
-                     Station("Pinion", tr.gear_inertia_high_kgm2, 1.0)]
-        shafts += [driver_shaft(T_ls, 1 / gr, "Driver shaft end"),
-                   Shaft("LS coupling", 1500.0 * 1.5 * T_ls, 1 / gr, (16 * T_ls / (math.pi * 40e6)) ** (1 / 3)),
-                   Shaft("Gear mesh (ref. pinion)", tr.gear_mesh_stiffness_nm_rad, 1.0, 0.12)]
+    P_kw = tr.motor_rated_power_kw or sizing["driver_rating_kw"]
+    T_d, T_c = 9549 * P_kw / N_d, 9549 * P_kw / N_c
+    mc = _mat(shaft_material)
+    md = _mat(shaft_material, tr.driveline_shaft_yield_mpa, tr.driveline_shaft_uts_mpa)
+    G = mc["shear_modulus_pa"]
+    electric = "motor" in db.driver_type
+    r_d, r_c = 1 / gr, 1.0
+    dirn = -1 if geared else 1
+    drv = "Motor" if electric else "Driver"
+    # Driver rotor (NDE -> coupling end).
+    if tr.motor_elements:
+        e_drv = _els(tr.motor_elements)
     else:
-        stations.append(Station("Coupling (driver half)", J_cpl, 1.0))
-        shafts.append(driver_shaft(T_c, 1.0, "Driver shaft end"))
-    stations.append(Station("Coupling (compressor half)", J_cpl, 1.0))
-    shafts.append(Shaft("Coupling", k_cpl, 1.0, rotor["coupling_diameter_m"]))
-    # Compressor stations: impellers, with shaft segments from the coupling hub.
-    prev_z, prev_name = rotor["coupling_hub_z_m"], "coupling hub"
-    sections = rotor["sections"]
-    for pm in [m for m in rotor["masses"] if m["kind"] == "impeller"]:
-        k = _segment_stiffness(sections, prev_z, pm["z_m"], G)
-        d = _min_diameter(sections, prev_z, pm["z_m"])
-        shafts.append(Shaft(f"Shaft {prev_name} - {pm['label']}", k, 1.0, d))
-        stations.append(Station(pm["label"], pm["ip_kgm2"] + _shaft_ip(sections, pm["z_m"], shaft_material), 1.0))
-        prev_z, prev_name = pm["z_m"], pm["label"]
-    return Train(stations, shafts)
+        J = tr.driver_inertia_kgm2 or 0.04 * P_kw * (1500.0 / N_d) ** 2
+        d = _d_end(T_d)
+        n_core = 4 if electric else 1
+        e_drv = [Element(0.3, 0.8 * d, label="NDE stub")]
+        e_drv += [Element(2.5 * d / n_core, 1.3 * d, added_ip=J / n_core, core=electric, excite=not electric,
+                          label="Core" if electric else "Driver body") for _ in range(n_core)]
+        e_drv.append(Element(0.6, d, label="Shaft end"))
+    parts, meshes, gear = [RotorPart(drv, e_drv, r_d, 1, md, dirn)], [], None
+    pf = tr.coupling_penetration_factor
+    if geared:
+        ip, k, tm, ta = _coupling(tr.ls_coupling, T_d, _d_end(T_d), G, pf)
+        parts.append(CouplingPart(f"Coupling {drv}-Bull gear", ip, k, r_d, 1, tm, ta))
+        beta = math.radians(tr.gear_helix_angle_deg)
+        at = math.atan(math.tan(math.radians(tr.gear_pressure_angle_deg)) / math.cos(beta))
+        d_ps, d_bs = _d_end(T_c), _d_end(T_d)
+        if teeth and tr.gear_module_mm:
+            dp = tr.pinion_teeth * tr.gear_module_mm / 1e3 / math.cos(beta)
+        else:
+            dp = 2.5 * d_ps
+        db_ = dp * gr
+        b = (tr.gear_face_width_mm or 0.9e3 * dp) / 1e3
+        rho = md["density_kg_m3"]
+        geo = teeth and tr.gear_module_mm
+        J_b = 0.8 * rho * math.pi * db_**4 * b / 32 if geo else tr.gear_inertia_low_kgm2
+        k_lin = tr.gear_mesh_stiffness_n_mm * 1e3 if tr.gear_mesh_stiffness_n_mm else (
+            20e6 * b * 1e3 if geo or tr.gear_face_width_mm else tr.gear_mesh_stiffness_nm_rad / (dp / 2 * math.cos(at)) ** 2)
+        if tr.bull_gear_elements:
+            e_b = _els(tr.bull_gear_elements)
+        else:
+            e_b = [Element(0.4, d_bs, label="Shaft end"), Element(b / 2, 1.3 * d_bs, label="Gear"),
+                   Element(b / 2, 1.3 * d_bs, added_ip=J_b, mesh=True, label="Gear"), Element(0.3, d_bs, label="NDE stub")]
+        if tr.pinion_elements:
+            e_p = _els(tr.pinion_elements)
+        else:
+            dpo = 0.85 * dp
+            jp = 0.0 if geo else tr.gear_inertia_high_kgm2
+            e_p = [Element(0.2, d_ps, label="NDE stub"), Element(b / 2, dpo, od_mass_m=dp if geo else dpo, label="Pinion"),
+                   Element(b / 2, dpo, od_mass_m=dp if geo else dpo, added_ip=jp, mesh=True, label="Pinion"),
+                   Element(0.35, d_ps, label="Shaft end")]
+        parts += [RotorPart("Bull gear", e_b, r_d, 1, md, dirn), RotorPart("Pinion", e_p, r_c, 2, md, 1)]
+        meshes.append(MeshPart("Gear mesh", k_lin, db_ / 2 * math.cos(at), dp / 2 * math.cos(at), "Bull gear", "Pinion"))
+        gear = {"ratio": gr, "pinion_teeth": tr.pinion_teeth, "bull_gear_teeth": tr.bull_gear_teeth, "module_mm": tr.gear_module_mm,
+                "pressure_angle_deg": tr.gear_pressure_angle_deg, "helix_angle_deg": tr.gear_helix_angle_deg,
+                "transverse_pressure_angle_deg": math.degrees(at), "pinion_pitch_diameter_mm": dp * 1e3,
+                "bull_pitch_diameter_mm": db_ * 1e3, "face_width_mm": b * 1e3, "mesh_stiffness_n_mm": k_lin / 1e3,
+                "mesh_k_bull_nm_rad": k_lin * (db_ / 2 * math.cos(at)) ** 2, "mesh_k_pinion_nm_rad": k_lin * (dp / 2 * math.cos(at)) ** 2,
+                "estimated": not geo}
+    cpl_name = "Coupling Pinion-Compressor" if geared else f"Coupling {drv}-Compressor"
+    ip, k, tm, ta = _coupling(tr.hs_coupling, T_c, rotor["coupling_diameter_m"], G, pf, tr.coupling_inertia_kgm2,
+                              tr.coupling_torsional_stiffness_nm_rad)
+    parts.append(CouplingPart(cpl_name, ip, k, r_c, 2 if geared else 1, tm, ta))
+    parts.append(RotorPart("Compressor", compressor_elements(rotor), r_c, 2 if geared else 1, mc, 1))
+    train, meta = build(parts, meshes)
+    lines = ({1: (f"{drv} + Bull gear", N_d), 2: ("Pinion + Compressor", N_c)} if geared else {1: (f"{drv} + Compressor", N_c)})
+    train.meta = meta
+    train.info = {"geared": geared, "gear_ratio": gr, "driver_rpm": N_d, "compressor_rpm": N_c, "rated_power_kw": P_kw,
+                  "lines": lines, "gear": gear, "electric": electric}
+    return train
 
 
-def _segment_stiffness(sections, z0, z1, G):
-    flex = 0.0
-    for s in sections:
-        a, b = max(s["z0_m"], min(z0, z1)), min(s["z1_m"], max(z0, z1))
-        if b > a:
-            Jp = math.pi / 32 * (s["od_m"] ** 4 - s["id_m"] ** 4)
-            flex += (b - a) / (G * Jp)
-    return 1.0 / flex if flex > 0 else 1e12
-
-
-def _min_diameter(sections, z0, z1):
-    ds = [s["od_m"] for s in sections if s["z1_m"] > min(z0, z1) and s["z0_m"] < max(z0, z1)]
-    return min(ds) if ds else sections[0]["od_m"]
-
-
-def _shaft_ip(sections, z, mat, width=0.15):
-    ip = 0.0
-    for s in sections:
-        a, b = max(s["z0_m"], z - width / 2), min(s["z1_m"], z + width / 2)
-        if b > a:
-            m = mat["density_kg_m3"] * math.pi / 4 * (s["od_m"] ** 2 - s["id_m"] ** 2) * (b - a)
-            ip += m * (s["od_m"] ** 2 + s["id_m"] ** 2) / 8
-    return ip
+def _sc_terms(rows, T_rated, line_hz):
+    return [{"mk_nm": r.mk_knm * 1e3 if r.mk_knm is not None else r.mk_pu * T_rated, "alpha": r.alpha_1_s,
+             "omega": r.omega_rad_s if r.omega_rad_s is not None else r.omega_x_line * 2 * math.pi * line_hz,
+             "phi": r.phase_rad} for r in rows]
 
 
 def torsional_analysis(project, train: Train, sizing: dict, shaft_material: dict) -> dict:
+    from compsuite.torsional import api617 as A
     tr, db, cr = project.train, project.design_basis, project.criteria
-    rec = record("torsional", "Lumped-parameter torsional model referred to compressor speed", [tr, db],
-                 assumptions=["Driver inertia, coupling stiffness/inertia estimated when not supplied",
-                              f"Modal damping ratio {tr.modal_damping_ratio}",
-                              "Forced response: 1 % rated torque at 1x compressor speed applied at the coupling",
-                              f"Separation margin {cr.torsional_separation_margin:.0%} over min-MCS speed range, first three modes",
-                              "VFD harmonic coincidences flagged for forced-response evaluation"],
-                 references=["API 617 8th ed. 4.8 / 1.x torsional analysis requirements", "API 684 Tutorial on torsional analysis",
-                             "openTorsion (Aalto ARotor) - intended advanced engine"])
-    nat = natural_frequencies(train)
+    info, meta = train.info, train.meta
+    vfd = db.driver_type == "vfd_motor"
+    rec = record("torsional", "Shaft finite-element torsional model of the train referred to compressor speed (API 617 / 684 / 671)",
+                 [tr, db],
+                 assumptions=["Massless torsional shaft elements with inertia lumped at the stations; coupling inertia split over the hubs",
+                              "Gear mesh as a spring on the pitch-line displacement (base radii); counter-rotation gives opposite mode-shape signs",
+                              f"Coupling stiffness per API 671 with {tr.coupling_penetration_factor:.2f} shaft penetration (estimated couplings)",
+                              "Driver, gear and coupling data estimated when not supplied (replace with vendor data)",
+                              f"Separation margin {cr.torsional_separation_margin:.0%} beyond {db.min_operating_speed_pct:.0f}-"
+                              f"{db.max_continuous_speed_pct:.0f} % speed; resonance dangerous when the exciting shaft line holds "
+                              f">= {tr.danger_strain_energy_share:.0%} of the modal strain energy",
+                              f"Steady state: exciting torque {tr.steady_excitation_pct:g} % of M = 9549 P/N, zeta = {tr.steady_state_damping_ratio}",
+                              "Allowable alternating shear tau = 0.577 Se Cs Cz / Kt x (1 - tau_m / (0.577 UTS)) / SF",
+                              f"Transient allowable shear = {tr.transient_yield_fraction} Sy / sqrt(3) (peak incl. rated torque)",
+                              f"Coupling: API 671 modified Goodman, mean {tr.coupling_goodman_mean_factor:g} x rated torque, SF = OB/OA >= {tr.coupling_min_safety}",
+                              "Short circuit M(t) = sum Mk exp(-a t) sin(w t + phi) at the motor core, Newmark modal integration"],
+                 references=["API 617 9th ed. (2022) torsional analysis", "API 684 (2019) torsional tutorial, penetration factor",
+                             "API 671 (2020) coupling Goodman evaluation", "ISO 6336-1 mesh stiffness c_gamma"])
     N = sizing["speed_rpm"]
-    rng = (N * db.min_operating_speed_pct / 100, N * db.max_continuous_speed_pct / 100)
-    inter = interference(train, nat, rng, rng[1], tr.gear_ratio, tr.line_frequency_hz, db.driver_type, tr.motor_poles,
-                         cr.torsional_separation_margin)
-    for c in inter["checks"]:
-        if not c["pass"] and "VFD" not in c["excitation"]:
-            rec.warn(f"Torsional mode {c['mode_hz']:.1f} Hz within {cr.torsional_separation_margin:.0%} of "
-                     f"{c['excitation']} band {c['band_hz'][0]:.1f}-{c['band_hz'][1]:.1f} Hz")
-    T_rated = sizing["shaft_power_kw"] * 1e3 / (N * math.pi / 30)
-    coupling_idx = next(i for i, s in enumerate(train.stations) if s.name == "Coupling (compressor half)")
-    speeds = np.linspace(0.05 * N, 1.2 * N, 300)
-    forced = forced_response(train, 6, speeds, 0.01 * T_rated, coupling_idx, 1.0, tr.modal_damping_ratio)
+    lo, hi = db.min_operating_speed_pct / 100, db.max_continuous_speed_pct / 100
+    T_motor = 9549 * info["rated_power_kw"] / info["driver_rpm"]
+    sc_cases = {}
+    if info["electric"] and tr.short_circuit_analysis:
+        # Fault at the motor terminals: stator frequency = drive output frequency for VFD motors.
+        f_sc = info["driver_rpm"] * tr.motor_poles / 120 if vfd else tr.line_frequency_hz
+        sc_cases = {"Three-phase short circuit": _sc_terms(tr.short_circuit_3ph, T_motor, f_sc),
+                    "Two-phase short circuit": _sc_terms(tr.short_circuit_2ph, T_motor, f_sc)}
+    s = A.Settings(info["rated_power_kw"], info["lines"], lo, hi, cr.torsional_separation_margin, tr.steady_state_damping_ratio,
+                   tr.steady_excitation_pct / 100, info["electric"], vfd, tr.line_frequency_hz, tr.motor_poles,
+                   dict(tr.vfd_harmonics_pct), tr.vfd_acceleration_time_s, sc_cases, tr.short_circuit_duration_s,
+                   dict(Cs=tr.shaft_surface_factor, Cz=tr.shaft_size_factor, Kt=tr.shaft_stress_concentration,
+                        SF=tr.shaft_fatigue_safety, tr_frac=tr.transient_yield_fraction),
+                   tr.coupling_goodman_mean_factor, tr.coupling_min_safety, tr.danger_strain_energy_share, max(tr.torsional_modes, 10))
+    res = A.analyse(train, meta, s)
+    md, c = res["md"], A.stress_factor(train)
+    T_rated = 9549 * info["rated_power_kw"] / N
+    comps = [n for n, r in meta["rotors"].items() if r["kind"] == "rotor"]
+    cpls = [n for n, r in meta["rotors"].items() if r["kind"] == "coupling"]
+
+    # Legacy keys: natural, interference, forced, stress.
+    nat = {"modes": [{"freq_hz": m["freq_hz"], "freq_cpm": m["freq_cpm"], "shape": m["shape"], "shaft_twist":
+                      [float(m["shape_ref"][sh.j] - m["shape_ref"][sh.i]) for sh in train.shafts],
+                      "dominant_shaft": max(m["strain_energy"], key=m["strain_energy"].get), "main_rotors": ", ".join(m["main"])}
+                     for m in res["modes"]],
+           "stations": [st.name for st in train.stations], "shafts": [sh.name for sh in train.shafts]}
+    speeds = np.linspace(0, 1.2 * N, 61)
+    exc = res["excitations"]
+    f_at = lambda e, rpm_c: (e["order"] * e["rpm"] * rpm_c / N / 60) if e["order"] else e["f_rated_cpm"] / 60
+    lines_hz = {e["name"]: [f_at(e, v) for v in speeds] for e in exc}
+    ss_by = {(x["mode"], x["excitation"]): x for x in res["steady_state"]}
+    checks = []
+    for row in res["separation_table"]:
+        for cell, e in zip(row["cells"], exc):
+            if row["mode"] > 3 and not cell["interferes"]:
+                continue
+            band = sorted([f_at(e, lo * N), f_at(e, hi * N)])
+            ok_sep = cell["separation"] >= cr.torsional_separation_margin
+            ss = ss_by.get((row["mode"], e["name"]))
+            checks.append({"mode_hz": row["freq_hz"], "excitation": e["name"], "band_hz": band, "separation": cell["separation"],
+                           "margin_pct": cell["margin_pct"], "crossing_rpm": cell["crossing_pct"] * N / 100 if cell["crossing_pct"] else None,
+                           "dangerous": cell["dangerous"], "separation_ok": ok_sep,
+                           "resolved_by_stress_analysis": bool(ss and ss["pass"]), "pass": ok_sep or bool(ss and ss["pass"])})
+    if res["vsd"]:
+        f_el = res["vsd"]["electrical_hz_rated"]
+        ok_order = {r["order"]: r["pass"] for r in res["vsd"]["responses"]}
+        for x in res["vsd"]["crossings"]:
+            if x["in_operating_range"] and x["evaluated"]:  # lower content is covered by the 1 % steady-state case
+                checks.append({"mode_hz": x["freq_cpm"] / 60, "excitation": f"VFD harmonic {x['order']}x f_el",
+                               "band_hz": [x["order"] * f_el * lo, x["order"] * f_el * hi], "separation": 0.0, "margin_pct": None,
+                               "crossing_rpm": x["speed_pct"] * N / 100, "dangerous": None, "separation_ok": False,
+                               "resolved_by_stress_analysis": ok_order.get(x["order"], True), "pass": ok_order.get(x["order"], True)})
+    inter = {"speeds_rpm": speeds.tolist(), "lines_hz": lines_hz, "checks": checks, "all_pass": all(x["pass"] for x in checks)}
+    for x in checks:
+        if not x["pass"] and "VFD" not in x["excitation"]:
+            rec.warn(f"Torsional mode {x['mode_hz']:.1f} Hz within {cr.torsional_separation_margin:.0%} of {x['excitation']} "
+                     f"band {x['band_hz'][0]:.1f}-{x['band_hz'][1]:.1f} Hz and not cleared by the stress analysis")
+
+    # 1 % rated torque at 1X compressor speed at the compressor coupling hub (legacy sweep).
+    comp_first = meta["rotors"]["Compressor"]["first"]
+    sp = np.linspace(0.05 * N, 1.2 * N, 200)
+    F = A.force_vector(train, [comp_first], 0.01 * T_rated)
+    Tsw = np.array([np.abs(A.harmonic(md, F, v * math.pi / 30, tr.modal_damping_ratio)) for v in sp])
+    forced = {"speeds_rpm": sp.tolist(), "order": 1.0,
+              "dynamic_torque_nm": {n: Tsw[:, meta["rotors"][n]["elements"]].max(axis=1).tolist() for n in comps + cpls}}
+    # Envelope of alternating element torque: legacy sweep + steady-state resonance cases.
+    env = Tsw.max(axis=0)
+    for x in res["steady_state"]:
+        env = np.maximum(env, np.array(x["element_shear_mpa"]) * 1e6 / np.where(c > 0, c, np.inf))
     stress = []
-    Se_shear = 0.577 * shaft_material["endurance_mpa"]
-    for sh in train.shafts:
-        Tdyn = max(forced["dynamic_torque_nm"][sh.name])
-        T_mean = T_rated / sh.ratio
-        Jp = math.pi * sh.diameter**4 / 32
-        tau_m = T_mean * sh.diameter / 2 / Jp / 1e6
-        tau_a = Tdyn * sh.diameter / 2 / Jp / 1e6
-        sf = 1 / (tau_a / Se_shear + tau_m / (0.577 * shaft_material["uts_mpa"])) if (tau_a + tau_m) > 0 else float("inf")
-        stress.append({"shaft": sh.name, "diameter_mm": sh.diameter * 1e3, "mean_torque_nm": T_mean,
-                       "max_dynamic_torque_nm": Tdyn, "mean_shear_mpa": tau_m, "alternating_shear_mpa": tau_a,
-                       "goodman_safety": sf})
-    out = {"train": {"stations": [s.__dict__ for s in train.stations], "shafts": [s.__dict__ for s in train.shafts]},
-           "natural": nat, "interference": inter, "forced": forced, "stress": stress, "rated_torque_nm": T_rated}
+    for n in comps:
+        r = meta["rotors"][n]
+        el = r["elements"]
+        e = el[int(np.argmax(env[el] * c[el]))]
+        sh, al = train.shafts[e], res["allowables"][n]
+        T_mean = 9549 * info["rated_power_kw"] / (sh.ratio * N)
+        tau_m, tau_a = T_mean * c[e] / 1e6, env[e] * c[e] / 1e6
+        sf = 1 / (tau_a / al["tau_e_mpa"] + tau_m / al["tau_u_mpa"]) if tau_a + tau_m > 0 else float("inf")
+        stress.append({"shaft": n, "diameter_mm": sh.diameter * 1e3, "mean_torque_nm": T_mean, "max_dynamic_torque_nm": float(env[e]),
+                       "mean_shear_mpa": tau_m, "alternating_shear_mpa": tau_a, "goodman_safety": sf, "station": sh.i + 1})
+
+    # Model / station report.
+    components = []
+    for n, r in meta["rotors"].items():
+        row = {"name": n, "kind": r["kind"], "line": r["line"], "speed_rpm": r["ratio"] * N}
+        if r["kind"] == "rotor":
+            row.update(ip_kgm2=r["ip_own"], stiffness_nm_rad=r["stiffness_own"], length_mm=r["length_m"] * 1e3,
+                       stations=[r["first"] + 1, r["last"] + 1], material={k: r["material"][k] for k in ("yield_mpa", "uts_mpa", "endurance_mpa")})
+        elif r["kind"] == "coupling":
+            row.update(ip_kgm2=r["ip"], stiffness_nm_rad=r["stiffness"], max_transient_torque_nm=r["max_transient_nm"],
+                       allowable_alternating_torque_nm=r["alt_allow_nm"], penetration_factor=tr.coupling_penetration_factor)
+        else:
+            row.update(stiffness_nm_rad=r["k_pinion_nm_rad"], mesh_stiffness_n_mm=r["k_n_mm"])
+        components.append(row)
+    model = {"components": components, "stations": meta["stations"], "gear": info["gear"], "geared": info["geared"],
+             "lines": {str(k): {"label": v[0], "rated_rpm": v[1]} for k, v in info["lines"].items()},
+             "rated_power_kw": info["rated_power_kw"], "rated_torque_nm": {str(k): v for k, v in res["rated_torque_nm"].items()},
+             "total_ip_ref_kgm2": float(np.trace(md["J"])), "electric": info["electric"], "vfd": vfd}
+    tnf = [{k: m[k] for k in ("mode", "freq_hz", "freq_cpm", "shape", "strain_energy", "kinetic_energy", "line_strain_energy", "main")}
+           for m in res["modes"]]
+    for x in res["steady_state"]:
+        if not x["pass"]:
+            rec.warn(f"Steady-state resonance mode {x['mode']} ({x['freq_cpm']:.0f} cpm) vs {x['excitation']}: stress or coupling SF not acceptable")
+    for k, v in res["short_circuit"].items():
+        if not v["pass"]:
+            rec.warn(f"{k}: peak shaft stress or coupling torque above the transient allowable")
+    if res["vsd"] and not res["vsd"]["pass"]:
+        rec.warn("VSD harmonic response exceeds allowable stress / coupling Goodman SF")
+    co = res["conclusion"]
+    text = [f"{co['interferences']} interference point(s) within the {cr.torsional_separation_margin:.0%} margin band, "
+            f"{co['dangerous']} on modes where the exciting shaft line participates.",
+            "Steady-state resonant stresses and coupling Goodman safety factors are acceptable." if co["steady_state_pass"]
+            else "Steady-state resonant response NOT acceptable at one or more interference points."]
+    if co["vsd_pass"] is not None:
+        text.append("VSD harmonic responses are acceptable." if co["vsd_pass"] else "VSD harmonic response NOT acceptable.")
+    if co["short_circuit_pass"] is not None:
+        text.append(("Short-circuit peak stresses and coupling torques are within the transient allowables" if co["short_circuit_pass"]
+                     else "Short-circuit peak stress or coupling torque exceeds the transient allowable")
+                    + ("; alternating stresses below the endurance limit: infinite fatigue life." if co["infinite_life"]
+                       else "; alternating stress above the endurance limit: limited number of fault events (cumulative damage assessment)."))
+    co["text"] = text
+    out = {"train": {"stations": [st.__dict__ for st in train.stations], "shafts": [sh.__dict__ for sh in train.shafts]},
+           "natural": nat, "interference": inter, "forced": forced, "stress": stress, "rated_torque_nm": T_rated,
+           "model": model, "tnf": tnf, "campbell": res["campbell"], "separation_table": res["separation_table"],
+           "steady_state": res["steady_state"], "vsd": res["vsd"], "short_circuit": res["short_circuit"],
+           "allowables": res["allowables"], "conclusion": co}
     if tr.synchronous_motor_startup and "motor" in db.driver_type:
-        sync = 120 * tr.line_frequency_hz / tr.motor_poles * tr.gear_ratio
+        sync = 120 * tr.line_frequency_hz / tr.motor_poles * info["gear_ratio"]
         out["startup"] = startup_transient(train, T_rated, sync, tr.line_frequency_hz, tr.motor_poles, tr.modal_damping_ratio)
         rec.assumptions.append("Synchronous motor start: 1.2 Tr average + 0.5 Tr pulsating at 2 x slip frequency")
     out["trace"] = rec

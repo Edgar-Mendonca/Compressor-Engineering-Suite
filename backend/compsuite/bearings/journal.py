@@ -68,6 +68,7 @@ class JournalBearing:
     pivot_offset: float = 0.5
     load_between_pads: bool = True
     n_theta: int = 241
+    pivot_stiffness: float | None = None  # N/m per pad; None = rigid pivots
 
     @property
     def R(self):
@@ -181,6 +182,13 @@ class JournalBearing:
             # damping with pads held at their static tilt (pad-fixed damping).
             Kd[:, j] = -(F(x0 + ex * dq, y0 + ey * dq, 0, 0) - F(x0 - ex * dq, y0 - ey * dq, 0, 0)) / (2 * dq)
             Cd[:, j] = -(F(x0, y0, ex * dv, ey * dv, static_tilts) - F(x0, y0, -ex * dv, -ey * dv, static_tilts)) / (2 * dv)
+        if self.pivot_stiffness and self.kind == "tilting_pad":
+            # Pivots in series with the film (bearing level: sum of cos^2 over pads = n/2).
+            kp = self.pivot_stiffness * self.n_pads / 2
+            for i in range(2):
+                f = kp / (Kd[i, i] + kp)
+                Kd[i, i] *= f
+                Cd[i, i] *= f * f
         ecc = math.hypot(x0, y0) / c
         attitude = math.degrees(math.atan2(x0, -y0))
         return {"kxx": Kd[0, 0], "kxy": Kd[0, 1], "kyx": Kd[1, 0], "kyy": Kd[1, 1],
@@ -226,7 +234,7 @@ def size_journal(W: float, shaft_d: float, design) -> JournalBearing:
     D = shaft_d
     return JournalBearing(diameter=D, length=design.length_to_diameter * D, clearance=design.radial_clearance_ratio * D / 2,
                           kind="plain_cylindrical" if design.journal_type == "plain_cylindrical" else "tilting_pad",
-                          n_pads=design.pads, preload=design.preload, pivot_offset=design.pivot_offset,
+                          n_pads=design.pads, preload=design.preload, pivot_offset=design.pivot_offset, pivot_stiffness=getattr(design, "pivot_stiffness_n_m", None),
                           load_between_pads=design.load_between_pads)
 
 

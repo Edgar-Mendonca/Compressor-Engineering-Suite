@@ -3,6 +3,17 @@
 Release notes shown on the launcher. Newest first. Releases are published
 from version tags (vX.Y.Z) with a Windows installer attached.
 
+## 0.4.1 - 2026-10-18
+- Modules in engineering order: materials, impeller design, impeller FEA, rotor, bearings, shop tests, lateral & stability, torsional, mechanical running test, systems, reports
+- Impeller design: velocity triangles, blade angles, de Haller ratio, meridional sketch, vendor-data override with estimate-vs-vendor table
+- Impeller FEA validation page as a step-by-step report: inputs, model, validation, results in three views, bore contact length >= 50 %, overspeed by two methods, acceptance table, run-all summary
+- Lateral (API 617-2022): min / max bearing clearance cases, unbalance per mode shape and coupling, AF / SM tables, Scc clearance check, deflected shapes
+- Stability: cross-coupling per impeller, Level I screening, Level II with labyrinth and balance-piston coefficients at min / max seal clearance
+- Torsional: motor - gearbox - compressor train, Campbell with 1X/2X and line frequency, dangerous-mode check, steady-state stresses, coupling Goodman (API 671), VSD harmonics, 2- and 3-phase short circuit
+- New module: mechanical running test - animated test train, speed-time plan with oil sequences, predicted Bode / polar / waterfall, acceptance, unbalanced rotor response test, test log, gas leak test, PDF
+- Shop tests now cover balancing and overspeed; the running test moved to its own module
+- Tilting-pad bearings: optional pivot stiffness; examples updated (VFD motor + gearbox, swirl brakes, Alloy 718 export impellers, sour example 5 impellers per casing) - both examples pass all checks
+
 ## 0.4.0 - 2026-10-17
 - Impeller FEA Pro: 3D cyclic-sector model (hub, blade, shroud), centrifugal, pressure, thermal and shrink-fit loads
 - Elastic-plastic 115 % overspeed with permanent growth, burst margin, Goodman (HCF) and LCF fatigue

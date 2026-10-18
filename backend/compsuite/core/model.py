@@ -107,6 +107,9 @@ class BearingDesign(BaseModel):
     pads: int = 5
     preload: float = Field(0.20, description="Tilting-pad preload m = 1 - Cb/Cp")
     pivot_offset: float = Field(0.5, description="Pivot location as a fraction of pad arc")
+    pivot_stiffness_n_m: Optional[float] = Field(None, description="Pivot stiffness per pad (series with film); blank = rigid")
+    clearance_tolerance_fraction: float = Field(0.11, description="Bearing clearance range +/- fraction (min/max cases)")
+    oil_supply_tolerance_c: float = Field(5.0, description="Oil supply temperature range +/- (min/max cases)")
     load_between_pads: bool = True
     oil_grade: Literal["ISO VG 32", "ISO VG 46", "ISO VG 68"] = "ISO VG 32"
     oil_supply_temperature_c: float = 50.0
@@ -126,7 +129,60 @@ class SealDesign(BaseModel):
     dgs_reference_leakage_nm3_h: float = Field(5.0, description="Vendor leakage at reference pressure (per seal)")
     dgs_reference_pressure_bara: float = 50.0
     seal_gas_superheat_margin_c: float = Field(20.0, description="Required margin above dew point (API 692 practice)")
+    pre_swirl_ratio: float = Field(0.5, description="Labyrinth inlet swirl ratio (stability Level II)")
+    swirl_brakes: bool = Field(False, description="Eye seals fitted with swirl brakes (pre-swirl 0)")
+    balance_piston_swirl_brake: bool = True
+    labyrinth_clearance_tolerance_mm: float = Field(0.1, description="Seal clearance range (min/max cases)")
+    labyrinth_tooth_height_mm: float = 3.5
+    gas_viscosity_pa_s: float = 1.3e-5
     seal_cross_coupling_n_m: float = Field(0.0, description="User-supplied total seal cross-coupling (if known)")
+
+
+class TorsionalElement(BaseModel):
+    """One torsional shaft element (vendor station table row); added inertia acts at its start station."""
+    length_mm: float
+    od_mm: float = Field(..., description="Stiffness outside diameter")
+    id_mm: float = 0.0
+    od_mass_mm: Optional[float] = Field(None, description="Mass outside diameter (default = stiffness OD)")
+    id_mass_mm: Optional[float] = None
+    added_ip_kgm2: float = 0.0
+    core: bool = Field(False, description="Start station is part of the motor core (electrical torque)")
+    mesh: bool = Field(False, description="Start station is the gear mesh point")
+    label: str = ""
+
+
+class TorsionalCoupling(BaseModel):
+    ip_kgm2: Optional[float] = None
+    stiffness_nm_rad: Optional[float] = None
+    max_transient_torque_nm: Optional[float] = Field(None, description="Default 5 x rated torque")
+    allowable_alternating_torque_nm: Optional[float] = Field(None, description="API 671 Goodman endurance intercept; default 0.15 x max transient")
+
+
+class ShortCircuitTerm(BaseModel):
+    """M(t) term Mk exp(-alpha t) sin(omega t + phi); Mk as multiple of rated torque unless mk_knm is set."""
+    mk_pu: float = 0.0
+    mk_knm: Optional[float] = None
+    alpha_1_s: float = 20.0
+    omega_x_line: float = Field(0.0, description="omega as multiple of 2 pi x line frequency")
+    omega_rad_s: Optional[float] = None
+    phase_rad: float = 0.0
+
+
+def _sc3() -> list:
+    return [ShortCircuitTerm(mk_pu=-0.5, alpha_1_s=18.0, omega_x_line=0.0, phase_rad=1.5708),
+            ShortCircuitTerm(mk_pu=-8.0, alpha_1_s=21.0, omega_x_line=1.0, phase_rad=0.0)]
+
+
+def _sc2() -> list:
+    return [ShortCircuitTerm(mk_pu=0.1, alpha_1_s=1000.0, omega_x_line=0.0, phase_rad=1.5708),
+            ShortCircuitTerm(mk_pu=-7.0, alpha_1_s=22.0, omega_x_line=1.0, phase_rad=0.0),
+            ShortCircuitTerm(mk_pu=4.5, alpha_1_s=12.0, omega_x_line=2.0, phase_rad=0.0)]
+
+
+def _vfd_harmonics() -> dict:
+    # Generic illustration of a multi-level drive; replace with the drive vendor's table.
+    return {5: 1.2, 7: 0.8, 11: 0.6, 13: 0.5, 17: 0.3, 19: 0.3, 23: 0.2, 25: 0.2, 29: 0.1, 31: 0.1, 35: 0.1, 37: 0.1,
+            41: 0.1, 43: 0.1, 47: 0.05, 49: 0.05}
 
 
 class TrainDesign(BaseModel):
@@ -142,6 +198,40 @@ class TrainDesign(BaseModel):
     motor_poles: int = 2
     modal_damping_ratio: float = 0.02
     synchronous_motor_startup: bool = False
+    # --- API 617 / 684 / 671 torsional report inputs (all optional, estimated when absent) ---
+    motor_rated_power_kw: Optional[float] = Field(None, description="Rated torque M = 9549 P / N (default: driver rating)")
+    pinion_teeth: Optional[int] = None
+    bull_gear_teeth: Optional[int] = None
+    gear_module_mm: Optional[float] = None
+    gear_pressure_angle_deg: float = 20.0
+    gear_helix_angle_deg: float = 10.0
+    gear_face_width_mm: Optional[float] = None
+    gear_mesh_stiffness_n_mm: Optional[float] = Field(None, description="Default 20 N/(mm um) x face width (ISO 6336 c_gamma)")
+    ls_coupling: Optional[TorsionalCoupling] = Field(None, description="Driver - bull gear coupling (geared trains)")
+    hs_coupling: Optional[TorsionalCoupling] = Field(None, description="Coupling at the compressor")
+    coupling_penetration_factor: float = Field(1 / 3, description="API 671 shaft penetration into hubs for estimated couplings")
+    motor_elements: Optional[list[TorsionalElement]] = None
+    bull_gear_elements: Optional[list[TorsionalElement]] = None
+    pinion_elements: Optional[list[TorsionalElement]] = None
+    driveline_shaft_yield_mpa: Optional[float] = Field(None, description="Motor / gear shaft material (default compressor shaft)")
+    driveline_shaft_uts_mpa: Optional[float] = None
+    torsional_modes: int = 12
+    steady_state_damping_ratio: float = 0.01
+    steady_excitation_pct: float = Field(1.0, description="Exciting torque, % of rated torque")
+    shaft_surface_factor: float = 0.8
+    shaft_size_factor: float = 0.75
+    shaft_stress_concentration: float = 2.0
+    shaft_fatigue_safety: float = 2.0
+    transient_yield_fraction: float = Field(0.7, description="Transient allowable shear = f Sy / sqrt(3)")
+    coupling_goodman_mean_factor: float = Field(1.1, description="Mean torque on the coupling Goodman diagram / rated torque")
+    coupling_min_safety: float = 1.25
+    danger_strain_energy_share: float = Field(0.10, description="Exciting shaft line share of modal strain energy that makes a resonance dangerous")
+    vfd_harmonics_pct: dict[int, float] = Field(default_factory=_vfd_harmonics, description="Torque harmonic content, % of rated, by order of motor electrical frequency")
+    vfd_acceleration_time_s: float = 60.0
+    short_circuit_analysis: bool = True
+    short_circuit_3ph: list[ShortCircuitTerm] = Field(default_factory=_sc3)
+    short_circuit_2ph: list[ShortCircuitTerm] = Field(default_factory=_sc2)
+    short_circuit_duration_s: float = 1.0
 
 
 class LubeDesign(BaseModel):
@@ -177,6 +267,8 @@ class Criteria(BaseModel):
     checked against the licensed edition named here before relying on them."""
     edition: str = "API 617 8th ed. (2014) - criteria to be verified by user"
     lateral_logdec_min: float = 0.1
+    lateral_logdec_level2_min: Optional[float] = Field(None, description="Level II log dec limit; 0.2 for Shell DEP, blank = API")
+    unbalance_ua_over_ur: float = 2.0
     unbalance_g_mm_factor: float = Field(6350.0, description="Ub = factor x W / N (W kg, N rpm)")
     unbalance_multiplier: float = 4.0
     amplitude_limit_um_cap: float = 25.4
@@ -322,6 +414,26 @@ class MaterialAssessment(BaseModel):
     records: list[MaterialRecord] = Field(default_factory=list, description="Empty = defaults from the automatic selection")
 
 
+class ImpellerVendor(BaseModel):
+    """Vendor data for one impeller (1-based number across the train). None = keep the app estimate."""
+    impeller: int = 1
+    D2_mm: Optional[float] = None
+    bore_mm: Optional[float] = None
+    b2_mm: Optional[float] = None
+    blades: Optional[int] = None
+    mass_kg: Optional[float] = None
+    cg_mm: Optional[float] = Field(None, description="Axial CG from the impeller back face")
+    ip_kgm2: Optional[float] = None
+    it_kgm2: Optional[float] = None
+    yield_mpa: Optional[float] = None
+    uts_mpa: Optional[float] = None
+    E_gpa: Optional[float] = None
+    poisson: Optional[float] = None
+    density_kg_m3: Optional[float] = None
+    temperature_c: Optional[float] = Field(None, description="Operating (metal) temperature")
+    min_radial_interference_mm: Optional[float] = Field(None, description="Minimum radial shrink-fit interference")
+
+
 class Project(BaseModel):
     name: str = "Example export gas compressor"
     description: str = "Single-casing centrifugal compressor, preliminary study"
@@ -342,6 +454,7 @@ class Project(BaseModel):
     criteria: Criteria = Field(default_factory=Criteria)
     casing_material: str = "ASTM A350 LF2"
     material_assessment: MaterialAssessment = Field(default_factory=MaterialAssessment)
+    impeller_vendor: list[ImpellerVendor] = Field(default_factory=list, description="Optional vendor impeller data (overrides estimates)")
 
     def design_case(self) -> OperatingCase:
         for c in self.cases:

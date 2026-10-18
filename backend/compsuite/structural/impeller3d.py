@@ -38,8 +38,10 @@ FACES = {"zmin": [0, 3, 2, 1], "zmax": [4, 5, 6, 7], "ymin": [0, 1, 5, 4], "ymax
 
 
 # ---------------------------------------------------------------- mesh
-def build_mesh(imp: dict, bore_d: float | None = None, level: int = 2, blade_t: float | None = None) -> dict:
-    """Structured sector mesh. Indices: i radial station, j tangential (camber-following), k axial layer."""
+def build_mesh(imp: dict, bore_d: float | None = None, level: int = 2, blade_t: float | None = None, thick=1.0) -> dict:
+    """Structured sector mesh. Indices: i radial station, j tangential (camber-following), k axial layer.
+    thick: factor on the hub, back-plate and shroud thickness, or (hub factor, back-plate / shroud factor)."""
+    fh, fo = (thick, thick) if np.isscalar(thick) else thick
     D2 = imp["D2_mm"] / 1e3
     r2, r1 = D2 / 2, imp["D1_eye_mm"] / 2e3
     rb = (bore_d or imp["hub_mm"] / 1e3 / 1.25) / 2
@@ -47,7 +49,7 @@ def build_mesh(imp: dict, bore_d: float | None = None, level: int = 2, blade_t: 
     Z = int(imp.get("blades", 17))
     beta = math.radians(imp.get("backsweep_deg", 40.0))
     tb = blade_t or max(0.003, 0.014 * D2)
-    t_hub, t_back, t_sh = 0.20 * D2, 0.035 * D2 + 0.004, 0.022 * D2 + 0.003
+    t_hub, t_back, t_sh = fh * 0.20 * D2, fo * (0.035 * D2 + 0.004), fo * (0.022 * D2 + 0.003)
     s = {1: 0.6, 2: 1.0, 3: 1.6}.get(level, 1.0)
     nri, nro = max(3, round(5 * s)), max(6, round(14 * s))
     nb, npz, ns, nside = max(2, round(3 * s)), max(2, round(3 * s)), 2, max(2, round(3 * s))
@@ -101,7 +103,97 @@ def build_mesh(imp: dict, bore_d: float | None = None, level: int = 2, blade_t: 
     pairs = [(gidr[i, 0, k], gidr[i, nj - 1, k]) for i in range(ni) for k in range(nk) if gidr[i, 0, k] >= 0 and gidr[i, nj - 1, k] >= 0]
     return {"nodes": nodes, "elements": els, "zone": np.array(zone), "ijk": np.array(ijk), "gid": gidr, "rs": rs, "alpha": alpha, "Z": Z,
             "r_bore": rb, "r_eye": r1, "r_tip": r2, "nb": nb, "npz": npz, "ns": ns, "nside": nside, "nblade": nblade,
-            "pairs": np.array(pairs), "blade_t": tb, "b2": b2, "level": level}
+            "pairs": np.array(pairs), "blade_t": tb, "b2": b2, "level": level, "thick": [float(fh), float(fo)]}
+
+
+def disk_mesh(ri: float, ro: float, t: float, Z: int = 24, nr: int = 12, nt: int = 3, nz: int = 2) -> dict:
+    """Flat annular disk sector (for the analytical rotating-disc check)."""
+    alpha = 2 * math.pi / Z
+    rs = np.linspace(ri, ro, nr + 1)
+    th = np.linspace(-alpha / 2, alpha / 2, nt + 1)
+    zs = np.linspace(0, t, nz + 1)
+    R, TH, ZZ = np.meshgrid(rs, th, zs, indexing="ij")
+    nodes = np.stack([R * np.cos(TH), R * np.sin(TH), ZZ], -1).reshape(-1, 3)
+    gid = np.arange(len(nodes)).reshape(R.shape)
+    els = [[gid[i, j, k], gid[i + 1, j, k], gid[i + 1, j + 1, k], gid[i, j + 1, k], gid[i, j, k + 1], gid[i + 1, j, k + 1],
+            gid[i + 1, j + 1, k + 1], gid[i, j + 1, k + 1]] for i in range(nr) for j in range(nt) for k in range(nz)]
+    pairs = [(gid[i, 0, k], gid[i, nt, k]) for i in range(nr + 1) for k in range(nz + 1)]
+    return {"nodes": nodes, "elements": np.array(els), "gid": gid, "alpha": alpha, "Z": Z, "pairs": np.array(pairs), "rs": rs}
+
+
+def fe_mass_properties(m: dict, rho: float) -> dict:
+    """Full-wheel mass, axial CG (from the back face), polar and transverse (about the CG) inertia of the FE model."""
+    _, detJ, _, _ = _geometry(m["nodes"], m["elements"])
+    Xg = np.einsum("ga,eaj->egj", NN, m["nodes"][m["elements"]])
+    dm = rho * detJ * m["Z"]
+    r2, z = Xg[..., 0]**2 + Xg[..., 1]**2, Xg[..., 2]
+    M = float(dm.sum())
+    zc = float((dm * z).sum() / M)
+    return {"mass_kg": M, "cg_mm": zc * 1e3, "ip_kgm2": float((dm * r2).sum()), "it_kgm2": float((dm * (r2 / 2 + (z - zc)**2)).sum())}
+
+
+def match_mass(imp: dict, bore_d, blade_t, rho: float, mass: float | None, ip: float | None = None):
+    """Thickness factors so the FE wheel matches the vendor mass (one factor) or mass and polar inertia (hub / outer factors)."""
+    if not mass:
+        return 1.0
+    def mp(f):
+        q = fe_mass_properties(build_mesh(imp, bore_d, 1, blade_t, (f[0], f[1])), rho)
+        return np.array([q["mass_kg"] / mass - 1, (q["ip_kgm2"] / ip - 1) if ip else 0.0])
+    f = np.ones(2)
+    for _ in range(8):
+        r0 = mp(f)
+        if np.abs(r0).max() < 0.003:
+            break
+        if not ip:
+            f = np.clip(f / (1 + r0[0]), 0.3, 3.0)
+            continue
+        J = np.column_stack([(mp(f + h) - r0) / 0.01 for h in (np.array([0.01, 0]), np.array([0, 0.01]))])
+        try:
+            step = np.linalg.solve(J, -r0)
+        except np.linalg.LinAlgError:
+            step = -r0
+        f = np.clip(f + np.clip(step, -0.5, 0.5), 0.2, 4.0)
+    return float(f[0]) if not ip else (float(f[0]), float(f[1]))
+
+
+def contact_length(z, ur_rel, delta: float) -> float:
+    """Percentage of the bore axial length still in contact: radial growth relative to the shaft below the radial interference."""
+    z, g = np.asarray(z, float), np.asarray(ur_rel, float) - delta
+    o = np.argsort(z)
+    zz = np.linspace(z[o][0], z[o][-1], 2001)
+    return float(np.mean(np.interp(zz, z[o], g[o]) <= 0) * 100)
+
+
+def rotating_disc_check(E: float, nu: float, rho: float, ri: float, ro: float, w: float) -> dict:
+    """Thin rotating annular disc: FE (this element and solver) against the plane-stress closed form at the bore."""
+    m = disk_mesh(ri, ro, 0.04 * ro)
+    sec = Sector(m, E, nu, rho, 0.0)
+    u = sec.solve(sec.f_centrifugal(w)).reshape(-1, 3)
+    X = sec.nodes
+    rN = np.hypot(X[:, 0], X[:, 1])
+    th = np.arctan2(X[:, 1], X[:, 0])
+    ur = u[:, 0] * np.cos(th) + u[:, 1] * np.sin(th)
+    hoop = _gauss_to_nodes(m, cylindrical(sec.stresses(u.ravel()), sec.Xg)[1])
+    bore = np.abs(rN - ri) < 1e-9
+    s_exact = (3 + nu) / 4 * rho * w**2 * (ro**2 + (1 - nu) / (3 + nu) * ri**2)
+    u_exact = ri * s_exact / E
+    s_fe, u_fe = float(hoop[bore].mean()), float(ur[bore].mean())
+    return {"hoop_bore_fe_mpa": s_fe / 1e6, "hoop_bore_exact_mpa": s_exact / 1e6, "hoop_error_pct": (s_fe - s_exact) / s_exact * 100,
+            "ur_bore_fe_um": u_fe * 1e6, "ur_bore_exact_um": u_exact * 1e6, "ur_error_pct": (u_fe - u_exact) / u_exact * 100,
+            "elements": len(m["elements"])}
+
+
+def patch_test(sec: "Sector") -> dict:
+    """Constant-strain patch test on the impeller mesh (linear field must give uniform exact stress) and free thermal expansion."""
+    e0 = np.array([1e-4, -5e-5, 2e-5, 3e-5, 0.0, 1e-5])        # engineering strains
+    G = np.array([[e0[0], e0[3] / 2, e0[5] / 2], [e0[3] / 2, e0[1], e0[4] / 2], [e0[5] / 2, e0[4] / 2, e0[2]]])
+    u = (sec.nodes @ G.T).ravel()
+    S = sec.stresses(u)
+    exact = sec.D1 @ e0 * sec.E
+    err = float(np.abs(S - exact).max() / np.abs(exact).max() * 100)
+    f, eps0 = sec.f_thermal(np.full(sec.n, 100.0))
+    th = float(von_mises(sec.stresses(sec.solve(f), eps0=eps0)).max() / 1e6)
+    return {"constant_strain_error_pct": err, "free_thermal_vm_mpa": th, "pass": err < 1e-6 and th < 1e-3}
 
 
 # ---------------------------------------------------------------- element matrices
@@ -466,13 +558,24 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
                                         "Alternating stress = fraction of steady (x3 at a SAFE interference) for the Goodman check"],
                  references=["API 617 8th ed. 2.6.2 impeller overspeed test; 4.2 rotor balancing", "Singh & Vargo SAFE diagram (1989)",
                              "Manson (1965) universal slopes", "Neuber (1961)"])
+    vend = imp.get("vendor") or {}
+    mo = imp.get("material_override") or {}
+    mat = {**mat, **{k: mo[k] for k in ("yield_mpa", "uts_mpa", "poisson", "density_kg_m3") if k in mo}}
+    if "E_gpa" in mo:
+        mat["E_pa"] = mo["E_gpa"] * 1e9
     E, nu, rho = mat["E_pa"], mat["poisson"], mat["density_kg_m3"]
     a_th = mat["expansion_um_mk"] * 1e-6
     Sy, Su = mat["yield_mpa"] * 1e6, mat["uts_mpa"] * 1e6
-    w = speeds["mcs_rpm"] * math.pi / 30
-    trip = speeds.get("trip_rpm", 1.05 * speeds["mcs_rpm"]) * math.pi / 30
+    n_mcs = speeds["mcs_rpm"]
+    w = n_mcs * math.pi / 30
+    n_trip = o.get("trip_rpm") or o.get("trip_factor", 1.10) * n_mcs
+    os_f = o.get("overspeed_factor", 1.15)
+    trip = n_trip * math.pi / 30
     bore_d = o.get("bore_mm") and o["bore_mm"] / 1e3
-    m = build_mesh(imp, bore_d, o["level"], o.get("blade_t_mm") and o["blade_t_mm"] / 1e3)
+    bt = o.get("blade_t_mm") and o["blade_t_mm"] / 1e3
+    thick = match_mass(imp, bore_d, bt, rho, o.get("target_mass_kg") or vend.get("mass_kg"), o.get("target_ip_kgm2") or vend.get("ip_kgm2"))
+    m = build_mesh(imp, bore_d, o["level"], bt, thick)
+    mesh_mass = fe_mass_properties(m, rho)
     sec = Sector(m, E, nu, rho, a_th)
     faces = surface_faces(m)
     tags = classify(m, faces)
@@ -496,7 +599,7 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
         if t in tags:
             f_p += sec.f_faces(tags[t], fun)
     # temperature: gas outlet temperature at the rim, 20 K lower at the bore
-    T_out = stage["T_out_c"]
+    T_out = mo.get("temperature_c", stage["T_out_c"])
     dT = (T_out - 20.0) - 20.0 * (r2 - rN) / (r2 - rb)
     f_t, eps0 = sec.f_thermal(dT)
     # shrink fit: unit bore pressure
@@ -515,8 +618,11 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
     c_shaft = (1 - nu) * rb / E                # solid shaft radial compression per Pa
     g_imp = ur_bore(u_c1)                       # bore growth per omega^2
     g_shaft = (1 - nu) * rho * rb**3 / (4 * E)  # solid shaft surface growth per omega^2
+    d_min = o.get("min_radial_interference_mm") or vend.get("min_radial_interference_mm")
     if o["interference_um_per_mm"]:
         delta = o["interference_um_per_mm"] * 1e-6 * 2 * rb * 1e3 / 2   # radial interference (m)
+    elif d_min:
+        delta = d_min / 1e3
     else:  # auto: interference for lift-off at 1.2 x MCS
         delta = (g_imp - g_shaft) * (1.2 * w) ** 2
 
@@ -539,7 +645,7 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
     case("MCS combined", w)
     case("Trip combined", trip)
     # overspeed test: centrifugal + fit at room temperature, elastic-plastic
-    wo = 1.15 * w
+    wo = os_f * w
     f_os = f_c1 * wo**2 + f_fit1 * p_fit(wo) / 1e6
     u_os, S_os, Es, eq_os = plastic_solve(sec, f_os, Sy, Su)
     u_el = sec.solve(f_os)
@@ -562,7 +668,7 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
 
     # speed sweep for the overspeed animation (elastic-plastic frames)
     frames = []
-    for frac in (0.0, 0.5, 0.8, 1.0, 1.05, 1.10, 1.15):
+    for frac in (0.0, 0.5, 0.8, 1.0, 1.05, 1.10, os_f):
         om = frac * w
         if frac <= 1.0:
             fr = sec.stresses(u_c1 * om**2 + u_fit1 * p_fit(om) / 1e6)
@@ -594,7 +700,6 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
                                "im": np.imag(v).round(4).tolist()})
 
     # SAFE / Campbell interference
-    n_mcs = speeds["mcs_rpm"]
     n_min = speeds.get("min_rpm", 0.7 * n_mcs)
     exc = [(f"{n}x (rotor / stall / volute)", n) for n in range(1, 7)]
     for lbl, cnt in (("Diffuser vanes", o["diffuser_vanes"]), ("IGV vanes", o["igv_vanes"]), ("Return vanes", o["return_vanes"])):
@@ -691,7 +796,7 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
                 SS = cases["Centrifugal MCS"][1]
                 s2 = sec
             else:
-                m2 = build_mesh(imp, bore_d, lv, o.get("blade_t_mm") and o["blade_t_mm"] / 1e3)
+                m2 = build_mesh(imp, bore_d, lv, bt, thick)
                 s2 = Sector(m2, E, nu, rho, a_th)
                 uu = s2.solve(s2.f_centrifugal(w))
                 SS = s2.stresses(uu)
@@ -705,6 +810,67 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
             a_, b_, c_ = (q["avg_hoop_mpa"] for q in conv)
             summary["convergence_error_pct"] = abs(c_ - b_) / max(abs(c_), 1e-9) * 100
 
+    # bore radial deformation along the bore (free impeller, centrifugal at MCS) vs the minimum radial interference
+    ring_k = [[int(q) for q in gid[0, :, k] if q >= 0] for k in range(gid.shape[2])]
+    ring_k = [r_ for r_ in ring_k if r_]
+    zb = np.array([X[r_, 2].mean() for r_ in ring_k])
+    Uc = (u_c1 * w**2).reshape(-1, 3)
+    urb = np.array([np.mean(Uc[r_, 0] * np.cos(np.arctan2(X[r_, 1], X[r_, 0])) + Uc[r_, 1] * np.sin(np.arctan2(X[r_, 1], X[r_, 0]))) for r_ in ring_k])
+    ur_sh = g_shaft * w**2
+    d_ref = d_min / 1e3 if d_min else delta
+    c_len = contact_length(zb, urb - ur_sh, d_ref)
+    bore_path = {"z_mm": (zb * 1e3).round(2).tolist(), "ur_mm": (urb * 1e3).round(5).tolist(), "shaft_growth_mm": ur_sh * 1e3,
+                 "min_radial_interference_mm": d_ref * 1e3, "interference_source": "vendor / input" if d_min else "model (lift-off at 1.2 x MCS)",
+                 "contact_length_pct": c_len, "axial_length_mm": float((zb.max() - zb.min()) * 1e3)}
+    os_ratio = os_f**2
+    hoop_mcs = float(mc["hoop_mpa"].max())
+    summary.update({"max_bore_ur_mm": float(urb.max() * 1e3), "min_radial_interference_mm": d_ref * 1e3, "contact_length_pct": c_len,
+                    "peak_hoop_mcs_mpa": hoop_mcs, "peak_vm_overspeed_scaled_mpa": vm_peak * os_ratio, "overspeed_ratio_sq": os_ratio,
+                    "peak_vm_overspeed_ep_mpa": summary["peak_vm_overspeed_mpa"], "fe_mass_kg": mesh_mass["mass_kg"], "thickness_factor": thick})
+    perm_lim = 0.0005 * rb * 1e6
+    acceptance = [
+        ("Max von Mises at MCS < yield", vm_peak, Sy / 1e6, "MPa", vm_peak < Sy / 1e6),
+        (f"Max von Mises at overspeed (scaled x{os_ratio:.3f}) < yield", vm_peak * os_ratio, Sy / 1e6, "MPa", vm_peak * os_ratio < Sy / 1e6),
+        ("Max von Mises at overspeed (elastic-plastic) < UTS", summary["peak_vm_overspeed_mpa"], Su / 1e6, "MPa", summary["peak_vm_overspeed_mpa"] < Su / 1e6),
+        ("Bore contact length at MCS >= 50 % of axial length", c_len, 50.0, "%", c_len >= 50),
+        ("Fit lift-off speed / MCS >= 1.15", summary["lift_off_ratio"], 1.15, "-", summary["lift_off_ratio"] >= 1.15),
+        ("Permanent bore growth after overspeed <= 0.05 % of bore", summary["permanent_bore_growth_um"], perm_lim, "um", summary["permanent_bore_growth_um"] <= perm_lim),
+        ("SAFE: no blade-passing interference in the speed range", 1.0 if interference else 0.0, 0.0, "hits", not interference),
+        ("Goodman safety factor (HCF) >= 1.5", summary["goodman_sf_min"], 1.5, "-", summary["goodman_sf_min"] >= 1.5),
+        ("LCF life / required starts >= 2", summary["lcf_ratio"], 2.0, "-", summary["lcf_ratio"] >= 2)]
+    acceptance = [{"criterion": a, "value": b, "limit": c, "unit": d, "status": "pass" if e else "fail"} for a, b, c, d, e in acceptance]
+    summary["qualified"] = all(a["status"] == "pass" for a in acceptance[:4])
+    if c_len < 50:
+        rec.warn(f"Impeller {imp['index'] + 1}: bore contact length at MCS {c_len:.0f} % < 50 % of the bore length")
+
+    # inputs (vendor-report style tables)
+    D2m = r2 * 2
+    sp_rows = [("Rated", speeds.get("rated_rpm") or n_mcs / 1.05), ("Maximum continuous (MCS)", n_mcs), ("Trip", n_trip), ("Overspeed test", os_f * n_mcs)]
+    ref = {"mass_kg": vend.get("mass_kg"), "cg_mm": vend.get("cg_mm"), "ip_kgm2": vend.get("ip_kgm2"), "it_kgm2": vend.get("it_kgm2")}
+    est = imp.get("estimate") or imp
+    inputs = {
+        "speeds": [{"speed": a, "rpm": b, "ratio_mcs": b / n_mcs, "tip_speed_m_s": b * math.pi / 30 * r2} for a, b in sp_rows],
+        "basic": [{"parameter": "Outer diameter D2", "unit": "mm", "value": D2m * 1e3, "vendor": vend.get("D2_mm")},
+                  {"parameter": "Bore diameter", "unit": "mm", "value": rb * 2e3, "vendor": vend.get("bore_mm")},
+                  {"parameter": "Exit width b2", "unit": "mm", "value": m["b2"] * 1e3, "vendor": vend.get("b2_mm")},
+                  {"parameter": "Blades", "unit": "-", "value": m["Z"], "vendor": vend.get("blades")}] +
+                 [{"parameter": lbl, "unit": u_, "value": mesh_mass[k], "vendor": ref[k], "estimate": est.get(k)}
+                  for k, lbl, u_ in (("mass_kg", "Mass (FE model)", "kg"), ("cg_mm", "Axial CG from back face", "mm"),
+                                     ("ip_kgm2", "Polar inertia Ip", "kg m2"), ("it_kgm2", "Transverse inertia It (about CG)", "kg m2"))],
+        "material": {"name": mat.get("key"), "E_gpa": E / 1e9, "poisson": nu, "density_kg_m3": rho, "yield_mpa": Sy / 1e6, "uts_mpa": Su / 1e6,
+                     "expansion_um_mk": a_th * 1e6, "temperature_range_c": [float(stage.get("T_in_c", 20.0)), float(T_out)],
+                     "source": "vendor" if mo else "database (derated to temperature)"}}
+    for b_ in inputs["basic"]:
+        b_["diff_pct"] = (b_["value"] - b_["vendor"]) / b_["vendor"] * 100 if b_.get("vendor") else None
+    model = {"element": "8-node hexahedron (hex8, 2x2x2 Gauss)", "elements": len(m["elements"]), "nodes": len(X), "dof": sec.ndof,
+             "elements_full": len(m["elements"]) * m["Z"], "nodes_full": len(X) * m["Z"], "sector_deg": 360 / m["Z"], "thickness_factor": thick,
+             "restraints": ["Cyclic symmetry on both sector faces (u_slave = R(alpha) u_master)", "Axial restraint of the bore ring at the back face",
+                            "One tangential restraint (rigid-body rotation) for the static cases", "Shrink fit as bore contact pressure (Lame shaft compliance)"],
+             "loads": [f"Centrifugal: MCS {n_mcs:.0f} rpm, trip {n_trip:.0f} rpm, overspeed {os_f * n_mcs:.0f} rpm",
+                       f"Gas pressure: passage {p1 / 1e5:.1f}-{p2 / 1e5:.1f} bara, cavities, blade loading dp {dp_blade / 1e3:.1f} kPa",
+                       f"Temperature: {T_out:.0f} C at the rim, 20 K lower at the bore", f"Shrink fit: radial interference {delta * 1e3:.3f} mm"]}
+    validation = {"patch": patch_test(sec), "disc": rotating_disc_check(E, nu, rho, rb, r2, w)}
+
     faces_v = [m["elements"][e][FACES[n]].tolist() for e, n in faces]
     return {
         "impeller": imp["index"] + 1, "summary": summary,
@@ -715,13 +881,25 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
                  "r_tip_mm": r2 * 1e3, "r_eye_mm": r1 * 1e3, "r_bore_mm": rb * 1e3, "level": m["level"]},
         "modes": mode_rows, "mode_shapes": shapes, "safe": {"excitations": [{"name": n_, "order": eo} for n_, eo in exc], "hits": hits[:40],
                                                            "speed_range_rpm": [n_min, n_mcs], "Z": Z},
-        "overspeed_frames": frames, "paths": paths, "convergence": conv,
+        "overspeed_frames": frames, "paths": paths, "convergence": conv, "bore_path": bore_path, "acceptance": acceptance,
+        "inputs": inputs, "model": model, "validation": validation,
         "fit": {"interference_um": delta * 2e6, "lift_off_rpm": w_lift * 30 / math.pi,
                 "curve": [{"rpm": f_ * n_mcs, "pressure_mpa": p_fit(f_ * w) / 1e6} for f_ in np.linspace(0, 1.3, 27)]},
         "material": {"name": mat.get("key"), "yield_mpa": Sy / 1e6, "uts_mpa": Su / 1e6, "E_gpa": E / 1e9},
-        "trace": rec,
+        "speeds": {"mcs_rpm": n_mcs, "trip_rpm": n_trip, "overspeed_rpm": os_f * n_mcs, "min_rpm": n_min},
+        "trace": rec, "_faces": faces,
         "_sector": sec, "_u": {c: f["_u"] for c, f in out_cases.items()}, "_fields": out_cases,
     }
+
+
+def summary_row(res: dict) -> dict:
+    """One row of the all-impellers table."""
+    s = res["summary"]
+    return {"impeller": res["impeller"], "max_vm_mcs_mpa": s["peak_vm_mcs_mpa"], "max_hoop_mcs_mpa": s["peak_hoop_mcs_mpa"],
+            "max_vm_overspeed_scaled_mpa": s["peak_vm_overspeed_scaled_mpa"], "max_vm_overspeed_ep_mpa": s["peak_vm_overspeed_mpa"],
+            "yield_mpa": res["material"]["yield_mpa"], "max_bore_ur_mm": s["max_bore_ur_mm"], "min_radial_interference_mm": s["min_radial_interference_mm"],
+            "contact_length_pct": s["contact_length_pct"], "fe_mass_kg": s["fe_mass_kg"], "qualified": s["qualified"],
+            "fails": [a["criterion"] for a in res["acceptance"] if a["status"] != "pass"]}
 
 
 # ---------------------------------------------------------------- exports

@@ -154,7 +154,17 @@ def build_checklist(project, res: dict) -> dict:
         stab = lat["stability"]
         items.append(_item("Lateral rotordynamics", f"Level I stability log dec with Qa - {tag}", f">= {cr.lateral_logdec_min}",
                            f"{stab['logdec_with_qa']:.3f}", stab["level1_pass"], "API 617 2.6.5", "rotordynamics.lateral",
-                           "" if stab["level1_pass"] else "Level II stability analysis required"))
+                           "" if stab["level1_pass"] else "Level II stability analysis required (see Level II)",
+                           attention=False) if not lat.get("stability_api617") else
+                     _item("Lateral rotordynamics", f"Level I stability log dec with Qa - {tag}", f">= {cr.lateral_logdec_min}",
+                           f"{stab['logdec_with_qa']:.3f}", True, "API 617 2.6.5", "rotordynamics.lateral",
+                           "" if stab["level1_pass"] else "Below Level I limit: Level II governs", attention=not stab["level1_pass"]))
+        s2 = lat.get("stability_api617")
+        if s2 and s2.get("level2"):
+            lim = cr.lateral_logdec_level2_min or cr.lateral_logdec_min
+            for l2 in s2["level2"]:
+                items.append(_item("Lateral rotordynamics", f"Level II stability log dec (rotor+bearings+seals) - {tag} {l2['label']}",
+                                   f">= {lim}", f"{l2['delta_f']:.3f}", l2["delta_f"] >= lim, "API 617 6.8.6", "rotordynamics.lateral"))
         seals = cas["seals"]
         items.append(_item("Seals", f"Balance piston leakage - {tag}", f"<= {cr.seal_balance_piston_leakage_max_pct} %",
                            f"{seals['balance_piston']['leakage_pct']:.2f} %",
@@ -206,9 +216,9 @@ def build_checklist(project, res: dict) -> dict:
                                f"{p['rho_v2_pa']:.0f} Pa (NPS {p['nps_in']})", p["rho_v2_pa"] <= project.piping.rho_v2_limit_pa,
                                "Industrial practice", "piping"))
     for txt in ("Casing pressure design, hydrotest and nozzle loads (API 617 / ASME VIII)",
-                "Impeller blade and shroud 3D stress / modal analysis (FEA)",
+                "Confirm impeller 3D FEA on the vendor CAD geometry",
                 "Rotor balancing grade and procedure (API 617 2.6.8)",
-                "Level II stability analysis with seal/impeller dynamic coefficients",
+                "Confirm Level II stability with vendor seal / impeller coefficients",
                 "Detailed bearing THD analysis and vendor coefficients",
                 "Dry gas seal system design per API 692; lube system per API 614",
                 "Material certification, hardness and SSC qualification per ISO 15156",
