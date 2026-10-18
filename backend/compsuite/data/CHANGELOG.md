@@ -3,6 +3,9 @@
 Release notes shown on the launcher. Newest first. Releases are published
 from version tags (vX.Y.Z) with a Windows installer attached.
 
+## 0.5.1 - 2026-10-18
+- Fixed the desktop app freezing ("Not responding"), slow loading and the need to restart: on every page load the window bridge exposed the native window object, and pywebview's scan of it waited on the window itself (a deadlock). The bridge now exposes only its file functions; the page API is ready in milliseconds
+
 ## 0.5.0 - 2026-10-18
 - New module: performance test to ASME PTC 10-2022 - Type 1 (specified gas) or Type 2 (substitute gas) with every test-gas combination (CO2, N2, R134a, CO2/N2, He/N2, custom) screened against the PTC 10 similarity limits, stand limits, critical speeds and the phase envelope; the export gas example loads a CO2 Type 2 test
 - Animated 2.5D closed test loop: gas flow coloured by temperature, control valve, cooler, orifice, gas charging, anti-surge, dry-gas-seal panel, live instruments and test map, run a speed line to surge

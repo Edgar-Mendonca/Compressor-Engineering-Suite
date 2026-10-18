@@ -33,7 +33,7 @@ class Bridge:
     """Native file dialogs for the web UI (window.pywebview.api.*). Remembers the last folder."""
 
     def __init__(self):
-        self.window = None
+        self._window = None   # private: pywebview must not expose (and walk) the native window object
         self._settings = data_dir() / "settings.json"
 
     def _get(self, k, default=None):
@@ -56,7 +56,7 @@ class Bridge:
         import webview
         from pathlib import Path
         folder = self._get("last_folder") or str(Path.home() / "Documents")
-        r = self.window.create_file_dialog(kind, directory=folder, save_filename=name, file_types=types)
+        r = self._window.create_file_dialog(kind, directory=folder, save_filename=name, file_types=types)
         if not r:
             return None
         path = r if isinstance(r, str) else r[0]
@@ -226,7 +226,7 @@ def main() -> int:
         bridge = Bridge()
         win = webview.create_window(f"{APP_NAME} {__version__}", html=SPLASH, width=1480, height=920, min_size=(1000, 640),
                                     background_color="#F2F3EF", js_api=bridge)
-        bridge.window = win
+        bridge._window = win
         webview.start(boot, win)
     except Exception as exc:  # no WebView2 runtime: use the default browser instead
         print(f"Native window unavailable ({exc}); opening the browser.")
