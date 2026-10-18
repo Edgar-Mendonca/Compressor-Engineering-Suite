@@ -330,3 +330,17 @@ tr.sel td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .pt-phase .bar { height: 7px; background: var(--line); position: relative; } .pt-phase .bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); }
 .pt-stab { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 8px; font-size: 11px; }
 .pt-stab .ok { color: var(--pass, #1f9d63); } .pt-stab .no { color: #b07a10; }
+.ts text { font-family: var(--sans, system-ui, sans-serif); }
+.ts .ts-lab { font: 600 10px var(--sans, sans-serif); letter-spacing: .14em; fill: var(--ink); }
+.ts .ts-sub { font: 9px var(--mono, monospace); fill: var(--muted); letter-spacing: .04em; }
+.ts .ts-name { font: 700 9.5px var(--mono, monospace); letter-spacing: .16em; fill: #fff; }
+.ts .ts-name.dark { fill: #2b343d; }
+.ts .ts-plate { font: 700 9px var(--mono, monospace); letter-spacing: .12em; fill: #24384a; }
+.ts .ts-lcd { font: 700 11px var(--mono, monospace); fill: #7CC69B; }
+.ts .ts-cardt { font: 700 9px var(--mono, monospace); letter-spacing: .12em; fill: var(--muted); text-transform: uppercase; }
+.ts .ts-tag { font: 700 8.5px var(--mono, monospace); }
+.ts .ts-val { font: 600 10px var(--mono, monospace); fill: var(--ink); font-variant-numeric: tabular-nums; }
+.ts .ts-flow { fill: none; stroke-width: 2.4; stroke-dasharray: 7 6; stroke-linecap: round; opacity: .85; }
+.ts .ts-oil { fill: none; stroke-width: 4; stroke-dasharray: 9 7; stroke-linecap: round; }
+.ts .ts-oil.thin { stroke-width: 2.6; }
+.ts .ts-pipe { fill: none; stroke-linejoin: round; stroke-linecap: round; }

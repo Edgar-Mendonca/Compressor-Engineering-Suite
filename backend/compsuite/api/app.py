@@ -600,6 +600,44 @@ def mrt_pdf(req: MRTRequest):
                     headers={"Content-Disposition": f'attachment; filename="{req.project.name.replace(" ", "_")}_MRT.pdf"'})
 
 
+class RDReportRequest(BaseModel):
+    project: Project
+    casing: int = 0
+
+
+def _pdf(data: bytes, project, kind: str):
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{project.name.replace(" ", "_")}_{kind}.pdf"'})
+
+
+@app.post("/api/{kind}/analysis-report.pdf")
+def rotordynamics_report(kind: str, req: RDReportRequest):
+    """Lateral, stability or torsional analysis report (needs a full-level run, reused from the cache)."""
+    from compsuite.reporting import prism
+    from compsuite.reporting import rotordynamics_reports as R
+    res = _run_cached(req.project, "full")
+    if not 0 <= req.casing < len(res["casings"]):
+        raise HTTPException(422, "No such casing")
+    if kind != "torsional" and not res["casings"][req.casing]["lateral"].get("bearing_cases"):
+        raise HTTPException(422, "Lateral bearing cases not available")
+    with prism._LOCK:
+        if kind == "lateral":
+            urt = None
+            try:
+                from compsuite.testing.mrt import mrt_analysis
+                urt = mrt_analysis(req.project, res, req.casing)["urt"]
+            except (KeyError, ValueError, IndexError):
+                pass
+            data = R.lateral_report(req.project, res, req.casing, urt)
+        elif kind == "stability":
+            data = R.stability_report(req.project, res, req.casing)
+        elif kind == "torsional":
+            data = R.torsional_report(req.project, res)
+        else:
+            raise HTTPException(404, "Unknown report")
+    return _pdf(data, req.project, f"{kind.title()}_analysis")
+
+
 @app.get("/api/test-tags")
 def test_tags():
     from compsuite.testing.tags import GLOSSARY, tag_table

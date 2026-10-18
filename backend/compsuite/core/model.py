@@ -117,6 +117,13 @@ class BearingDesign(BaseModel):
     user_coefficients: Optional[BearingCoefficients] = None
     thrust_allowable_unit_load_mpa: float = 2.4
     thrust_target_residual_kn: float = 10.0
+    lateral_cases: Literal["min_avg_max", "all"] = Field("min_avg_max", description="Bearing cases: min / average / max clearance with min / nominal / max oil "
+                                                         "inlet temperature; 'all' adds min clearance + max oil and max clearance + min oil")
+    support_stiffness_n_m: float = Field(0.0, description="Bearing support (pedestal / casing) stiffness in series with the oil film; 0 = rigid")
+    support_damping_n_s_m: float = 0.0
+    include_seals_in_lateral: bool = Field(True, description="Labyrinth / balance-drum seal stiffness and damping in the lateral response model")
+    bearing_make_model: str = ""
+    rotor_weight_drawing_kg: Optional[float] = Field(None, description="Rotor weight from the rotor assembly drawing (consistency check)")
 
 
 class SealDesign(BaseModel):
@@ -225,6 +232,8 @@ class TrainDesign(BaseModel):
     transient_yield_fraction: float = Field(0.7, description="Transient allowable shear = f Sy / sqrt(3)")
     coupling_goodman_mean_factor: float = Field(1.1, description="Mean torque on the coupling Goodman diagram / rated torque")
     coupling_min_safety: float = 1.25
+    breaker_clearing_time_s: Optional[float] = Field(None, description="Protection (breaker) clearing time: short-circuit torque removed after it")
+    short_circuit_events: int = Field(1000, description="Short-circuit / start events over the life for the cumulative fatigue (Miner) check")
     danger_strain_energy_share: float = Field(0.10, description="Exciting shaft line share of modal strain energy that makes a resonance dangerous")
     vfd_harmonics_pct: dict[int, float] = Field(default_factory=_vfd_harmonics, description="Torque harmonic content, % of rated, by order of motor electrical frequency")
     vfd_acceleration_time_s: float = 60.0

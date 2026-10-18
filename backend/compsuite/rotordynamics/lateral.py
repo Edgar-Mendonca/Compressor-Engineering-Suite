@@ -197,11 +197,28 @@ def lateral_analysis(model: fe.RotorModel, rotor: dict, sizing: dict, project, w
     from compsuite.rotordynamics.stability import stability_analysis
     sp = {"min_rpm": n_min, "rated_rpm": N, "mcs_rpm": n_mcs, "trip_rpm": n_trip}
     v2 = []
+    seal_sup, seal_rows = [], []
+    if getattr(project.bearings, "include_seals_in_lateral", False) and stages and impellers and seals:
+        from compsuite.rotordynamics.stability import seal_coefficient_table, seal_inventory, seal_supports
+        try:
+            seal_rows = seal_coefficient_table(seal_inventory(stages, impellers, seals, rotor, project.seals), w_mcs, 0.0, project.seals)
+            seal_sup = seal_supports(seal_rows)
+            rec.assumptions.append("Labyrinth and balance-drum seal stiffness and damping (bulk-flow estimate at MCS) included in the lateral response model")
+        except (KeyError, ValueError, ZeroDivisionError) as exc:
+            rec.warn(f"Seal coefficients not included in the lateral model: {exc}")
+    if getattr(project.bearings, "support_stiffness_n_m", 0):
+        rec.assumptions.append(f"Bearing supports flexible: {project.bearings.support_stiffness_n_m:.3g} N/m in series with the oil film (support mass neglected)")
+    else:
+        rec.assumptions.append("Bearing supports rigid (pedestal / casing flexibility not modelled)")
     for bc in bearing_cases or [None]:
-        mc = _case_model(model, rotor, bc)
+        mc = _case_model(model, rotor, bc, project.bearings, seal_sup)
         case = bc or {"key": "nominal", "label": "Nominal clearance / nominal oil inlet temperature",
                       "oil_inlet_c": project.bearings.oil_supply_temperature_c}
         v2.append(api617_case(mc, rotor, sp, cr, clearance_stations(mc, rotor, seals, project, bc), ucs, case, rec))
+        if seal_sup:   # stability adds its own seal coefficients at min / max seal clearance
+            mb = _case_model(model, rotor, bc, project.bearings, None)
+            S_ = mb.assemble_structural()
+            v2[-1].update({"_model": mb, "_structural": S_, "_basis": mb.reduction_basis(w_mcs, 40, S_)})
     stab2 = stability_analysis([{"key": c["key"], "label": c["label"], "model": c.pop("_model"), "structural": c.pop("_structural"),
                                  "basis": c.pop("_basis")} for c in v2], rotor, stages, impellers, seals, project, N, n_mcs, n1_rigid, wachel_q)
     for r in stab2["level2"]:
@@ -225,7 +242,7 @@ def lateral_analysis(model: fe.RotorModel, rotor: dict, sizing: dict, project, w
             "amplitude_limit_um": amplitude_limit_um(n_mcs, cr.amplitude_limit_um_cap),
             "separation_and_amplitude_pass": all_pass, "bearing_cases": v2, "unbalance_table": v2[0]["unbalance"] and
             [{k: u[k] for k in ("case", "label", "unbalances")} for u in v2[0]["unbalance"]],
-            "stability_api617": stab2, "conclusion": {"items": concl, "pass": all(i["pass"] or "Level I" in i["item"] for i in concl)},
+            "stability_api617": stab2, "seal_coefficients_lateral": seal_rows, "conclusion": {"items": concl, "pass": all(i["pass"] or "Level I" in i["item"] for i in concl)},
             "trace": rec}
 
 
@@ -300,8 +317,11 @@ def bearing_cases(jb: dict, speeds_rad: np.ndarray, design) -> list[dict]:
     tol = getattr(design, "clearance_tolerance_fraction", 0.11)
     dt = getattr(design, "oil_supply_tolerance_c", 5.0)
     out = []
-    for key, f, sgn, label in (("min", 1 - tol, -1, "Min clearance / min oil inlet temperature"),
-                               ("max", 1 + tol, 1, "Max clearance / max oil inlet temperature")):
+    spec = [("min", 1 - tol, -1, "Min clearance / min oil inlet temperature"), ("avg", 1.0, 0, "Average clearance / nominal oil inlet temperature"),
+            ("max", 1 + tol, 1, "Max clearance / max oil inlet temperature")]
+    if getattr(design, "lateral_cases", "min_avg_max") == "all":
+        spec += [("min_hot", 1 - tol, 1, "Min clearance / max oil inlet temperature"), ("max_cold", 1 + tol, -1, "Max clearance / min oil inlet temperature")]
+    for key, f, sgn, label in spec:
         t_oil = design.oil_supply_temperature_c + sgn * dt
         jbc = {}
         for lb, (b, W) in jb.items():
@@ -312,14 +332,33 @@ def bearing_cases(jb: dict, speeds_rad: np.ndarray, design) -> list[dict]:
     return out
 
 
-def _case_model(model: fe.RotorModel, rotor: dict, bc: dict | None) -> fe.RotorModel:
-    if bc is None:
+def series_support(rows: list[dict], w: np.ndarray, ks: float, cs: float) -> dict:
+    """Oil film in series with a flexible support: Z = Zb Zs / (Zb + Zs) on the direct terms (Z = k + i w c);
+    cross-coupled terms scaled by the same complex ratio. Support mass neglected."""
+    out = {k: np.array([r[k] for r in rows], dtype=float) for k in fe.COEF_KEYS}
+    if ks <= 0:
+        return out
+    for d in ("xx", "yy"):
+        zb = out["k" + d] + 1j * w * out["c" + d]
+        zs = ks + 1j * w * cs
+        ze = zb * zs / (zb + zs)
+        ratio = ze / zb
+        out["k" + d], out["c" + d] = ze.real, ze.imag / np.maximum(w, 1e-9)
+        for x in ("xy", "yx") if d == "xx" else ():
+            zc = (out["k" + x] + 1j * w * out["c" + x]) * ratio
+            out["k" + x], out["c" + x] = zc.real, zc.imag / np.maximum(w, 1e-9)
+    return out
+
+
+def _case_model(model: fe.RotorModel, rotor: dict, bc: dict | None, design=None, seal_sup: list | None = None) -> fe.RotorModel:
+    if bc is None and not seal_sup:
         return model
-    sup = []
-    for (label, tab), z in zip(bc["tables"]["bearings"].items(), rotor["bearing_z_m"]):
+    sup = [s for s in model.supports if s.kind == "bearing"] if bc is None else []
+    ks, cs = float(getattr(design, "support_stiffness_n_m", 0) or 0), float(getattr(design, "support_damping_n_s_m", 0) or 0)
+    for (label, tab), z in zip((bc or {}).get("tables", {}).get("bearings", {}).items(), rotor["bearing_z_m"]):
         w = np.asarray(tab["speeds_rpm"]) * math.pi / 30
-        sup.append(fe.Support(label, z, fe.tabulated_support(w, {k: np.array([r[k] for r in tab["rows"]]) for k in fe.COEF_KEYS})))
-    return fe.RotorModel(model.sections, model.masses, sup, model.E, model.G, model.rho, model.max_element_length)
+        sup.append(fe.Support(label, z, fe.tabulated_support(w, series_support(tab["rows"], w, ks, cs))))
+    return fe.RotorModel(model.sections, model.masses, sup + list(seal_sup or []), model.E, model.G, model.rho, model.max_element_length)
 
 
 def clearance_stations(model, rotor: dict, seals: dict | None, project, bc: dict | None) -> list[dict]:
@@ -487,7 +526,8 @@ def api617_case(m: fe.RotorModel, rotor: dict, sp: dict, cr, stations: list[dict
         shapes = [{"speed_rpm": float(v), "label": "Nmc" if i == len(shape_speeds) - 1 else "critical",
                    "shape_um": rs["deflected_shapes_um"][i]} for i, v in enumerate(shape_speeds)]
         bode = {b.label: {"amp_pp_um": pp[round(b.z, 6)].tolist(), "phase_deg": r["probes"][pk(b.z)]["x_phase_deg"]} for b in brg}
-        results.append({**d, "speeds_rpm": spd.tolist(), "bode": bode, "criticals": crit, "amax_um": amax, "avl_um": avl, "scc": scc,
+        bode_st = {f"{st['label']} (node {st.get('node', '-')})": pp[round(st["z_m"], 6)].tolist() for st in stations}
+        results.append({**d, "speeds_rpm": spd.tolist(), "bode": bode, "bode_stations": bode_st, "criticals": crit, "amax_um": amax, "avl_um": avl, "scc": scc,
                         "clearance": clr, "deflected_shapes": shapes,
                         "pass": all(c["pass"] for c in crit) and all(c["qualified"] for c in clr)})
     return {"key": case["key"], "label": case["label"], "oil_inlet_c": case.get("oil_inlet_c"),

@@ -376,6 +376,7 @@ def torsional_analysis(project, train: Train, sizing: dict, shaft_material: dict
                    dict(Cs=tr.shaft_surface_factor, Cz=tr.shaft_size_factor, Kt=tr.shaft_stress_concentration,
                         SF=tr.shaft_fatigue_safety, tr_frac=tr.transient_yield_fraction),
                    tr.coupling_goodman_mean_factor, tr.coupling_min_safety, tr.danger_strain_energy_share, max(tr.torsional_modes, 10))
+    s.sc_clear_s, s.sc_events = tr.breaker_clearing_time_s, tr.short_circuit_events
     res = A.analyse(train, meta, s)
     md, c = res["md"], A.stress_factor(train)
     T_rated = 9549 * info["rated_power_kw"] / N

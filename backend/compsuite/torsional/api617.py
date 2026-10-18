@@ -375,6 +375,22 @@ class Settings:
     cpl_sf_min: float = 1.25
     danger_share: float = 0.10
     n_modes: int = 12
+    sc_clear_s: float | None = None   # protection clearing time: excitation removed after it
+    sc_events: int = 1000             # events over the life (cumulative fatigue)
+
+
+def miner_damage(series: np.ndarray, tau_e: float, tau_u: float, events: int) -> dict:
+    """Cumulative damage of the decaying transient: each response peak above the endurance shear is one cycle,
+    life from a Basquin line through (1e3 cycles, 0.9 tau_u) and (1e6 cycles, tau_e)."""
+    a = np.abs(np.asarray(series))
+    pk = a[1:-1][(a[1:-1] >= a[:-2]) & (a[1:-1] >= a[2:])] if len(a) > 2 else a
+    pk = pk[pk > tau_e]
+    if not len(pk) or tau_u <= tau_e:
+        return {"cycles_above_endurance": 0, "damage_per_event": 0.0, "damage": 0.0, "infinite_life": True}
+    b = math.log10(0.9 * tau_u / tau_e) / 3.0
+    n = 1e6 * (tau_e / np.minimum(pk, 0.9 * tau_u)) ** (1 / b)
+    d1 = float(np.sum(1 / n))
+    return {"cycles_above_endurance": int(len(pk)), "damage_per_event": d1, "damage": d1 * events, "infinite_life": False}
 
 
 def _decimate(a, n=800):
@@ -473,7 +489,8 @@ def analyse(train: Train, meta: dict, s: Settings) -> dict:
     if s.electric and motor and s.sc_cases:
         F1 = force_vector(train, core_nodes, 1.0)
         for name, terms in s.sc_cases.items():
-            fn = lambda t, terms=terms: sc_torque(t, terms)
+            clr = s.sc_clear_s
+            fn = lambda t, terms=terms: sc_torque(t, terms) * (np.asarray(t) <= clr if clr else 1.0)
             f_exc = max([tm["omega"] / (2 * math.pi) for tm in terms] + [1.0])
             t, Te = newmark_modal(md, F1, fn, s.sc_duration_s, s.zeta, f_exc)
             rows, cps, series = [], [], {}
@@ -486,7 +503,9 @@ def analyse(train: Train, meta: dict, s: Settings) -> dict:
                     tm = rated[r["line"]] * c[e] / 1e6
                     tot = float(max(abs(tm + tk.max()), abs(tm + tk.min())))
                     t_alt = float((tk.max() - tk.min()) / 2)
-                    rows.append({"rotor": n, "max_shear_mpa": float(np.abs(tk).max()), "max_total_shear_mpa": tot,
+                    tau_u = al[n].get("tau_u_mpa") or al[n]["transient_mpa"] / 0.7 * 1.6
+                    mn = miner_damage(tk, al[n]["tau_e_mpa"], tau_u, s.sc_events)
+                    rows.append({"rotor": n, "max_shear_mpa": float(np.abs(tk).max()), "max_total_shear_mpa": tot, "miner": mn,
                                  "mean_shear_mpa": tm, "alternating_shear_mpa": t_alt, "allowable_mpa": al[n]["transient_mpa"],
                                  "endurance_shear_mpa": al[n]["tau_e_mpa"], "station": train.shafts[e].i + 1,
                                  "pass": tot <= al[n]["transient_mpa"], "infinite_life": t_alt < al[n]["tau_e_mpa"]})
@@ -496,11 +515,14 @@ def analyse(train: Train, meta: dict, s: Settings) -> dict:
                     tm = rated[r["line"]]
                     tot = float(max(abs(tm + tq.max()), abs(tm + tq.min())))
                     cps.append({"coupling": n, "max_torque_nm": float(np.abs(tq).max()), "max_total_torque_nm": tot,
+                                "min_total_torque_nm": float(tm + tq.min()), "torque_reversal": bool(tm + tq.min() < 0),
                                 "allowable_nm": r["max_transient_nm"], "pass": tot <= r["max_transient_nm"]})
                     series[n] = _decimate(tq).tolist()
             sc[name] = {"terms": terms, "t_s": _decimate(t).tolist(), "excitation_nm": _decimate(fn(t)).tolist(),
                         "series": series, "rotors": rows, "couplings": cps,
-                        "pass": all(x["pass"] for x in rows + cps), "infinite_life": all(x["infinite_life"] for x in rows)}
+                        "pass": all(x["pass"] for x in rows + cps), "infinite_life": all(x["infinite_life"] for x in rows),
+                        "clearing_time_s": s.sc_clear_s, "events": s.sc_events, "miner_damage": max([x["miner"]["damage"] for x in rows] or [0.0]),
+                        "torque_reversal": any(x["torque_reversal"] for x in cps)}
 
     inter_pairs = [(r["mode"], x["excitation"], x["dangerous"]) for r in table for x in r["cells"] if x["interferes"]]
     concl = {"interferences": len(inter_pairs), "dangerous": sum(1 for p in inter_pairs if p[2]),

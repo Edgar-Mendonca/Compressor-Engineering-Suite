@@ -60,9 +60,9 @@ def lat():
 
 
 def test_example_api617_run(lat):
-    assert [c["key"] for c in lat["bearing_cases"]] == ["min", "max"]
-    kmin, kmax = (c["k_at_mcs_n_m"] for c in lat["bearing_cases"])
-    assert kmin > kmax > 0  # tighter, colder bearing is stiffer
+    assert [c["key"] for c in lat["bearing_cases"]] == ["min", "avg", "max"]
+    kmin, kavg, kmax = (c["k_at_mcs_n_m"] for c in lat["bearing_cases"])
+    assert kmin > kavg > kmax > 0  # tighter, colder bearing is stiffer
     for c in lat["bearing_cases"]:
         assert len(c["undamped_modes"]) == 4 and c["bearing_coefficients"]
         assert [u["case"] for u in c["unbalance"]] == [1, 2, 3]
@@ -73,7 +73,7 @@ def test_example_api617_run(lat):
             assert u["deflected_shapes"][-1]["label"] == "Nmc"
     st = lat["stability_api617"]
     assert st["qa_total_kn_mm"] > 0 and len(st["qa_table"]) > 0 and st["csr"] > 1
-    assert len(st["level1"]) == 2 and len(st["level2"]) == 2
+    assert len(st["level1"]) == 3 and len(st["level2"]) == 3
     assert all(r["q0_kn_mm"] > 0 for r in st["level1"]) and all("delta_f_min_seal" in r for r in st["level2"])
     assert len(st["seal_coefficients"]["min"]) == len(st["qa_table"]) + 1  # eye seals + balance piston
     # Legacy keys still present

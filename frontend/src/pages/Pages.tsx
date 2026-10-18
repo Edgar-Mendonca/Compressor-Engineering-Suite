@@ -8,7 +8,7 @@ const SectionPlot = lazy(() => import("../components/ImpellerFEAView").then((m) 
 const RotorView = lazy(() => import("../components/RotorView").then((m) => ({ default: m.RotorView })));
 const Lazy = ({ children }: { children: JSX.Element }) => <Suspense fallback={<p className="muted">Loading 3D view…</p>}>{children}</Suspense>;
 import { MeridionalSketch, VelocityTriangles } from "../components/ImpellerSketches";
-import { saveProject } from "../files";
+import { safeName, saveFrom, saveProject } from "../files";
 import { SchemaForm } from "../components/SchemaForm";
 
 export type Ctx = {
@@ -613,6 +613,15 @@ export function BearingsSealsPage(c: Ctx) {
 }
 
 // ------------------------------------------------------------------ dynamics
+/** Download buttons for the lateral / stability / torsional analysis reports (full-level run on the server). */
+function RDReports({ c, kinds }: { c: Ctx; kinds: [string, string][] }) {
+  const [busy, setBusy] = useState("");
+  return <div className="row" style={{ margin: "6px 0 12px" }}>{kinds.map(([k, l]) => <button key={k} className="btn primary" disabled={!!busy}
+    onClick={async () => { setBusy(k); try { await saveFrom(`/api/${k}/analysis-report.pdf`, { project: c.project, casing: c.casing ?? 0 }, `${safeName(c.project.name)}_${k}_analysis.pdf`); } finally { setBusy(""); } }}>
+    {busy === k ? "Building report…" : l}</button>)}
+    <span className="muted small">Our report layout: cover and summary, contents, references and assumptions, data, results per bearing case, conclusion, appendices, legend and sign-off (document data on the test pages' Tags & glossary tab).</span></div>;
+}
+
 const LAT_TABS: [string, string, string][] = [
   ["model", "Model & bearings", "Rotor model and bearing coefficients used for both bearing cases (min clearance / min oil temperature, max clearance / max oil temperature)."],
   ["map", "Critical speed map", "Where the undamped critical speeds sit against the real bearing stiffness: the intersections are the expected critical speeds."],
@@ -667,7 +676,8 @@ export function LateralPage(c: Ctx) {
     <>
       <h2>Lateral &amp; stability</h2>
       <p className="lead">Finite-element rotor (Timoshenko beams, gyroscopics, speed-dependent bearings) evaluated in the order of an
-        API 617-2022 lateral and stability report, for the minimum- and maximum-clearance bearing cases.</p>
+        API 617-2022 lateral and stability report, for the minimum / average / maximum bearing clearance and oil inlet temperature cases.</p>
+      <RDReports c={c} kinds={[["lateral", "Lateral analysis report (PDF)"], ["stability", "Stability analysis report (PDF)"]]} />
       <Kpis items={[["Speed range", `${fmt(sp.min_rpm, 0)}–${fmt(sp.mcs_rpm, 0)} rpm`], ["Trip", `${fmt(sp.trip_rpm, 0)} rpm`],
         ["FCSR (rigid supports)", `${fmt(st.first_critical_rigid_rpm, 0)} rpm`], ["CSR", fmt(st.critical_speed_ratio, 2)],
         ["QA (Σ qA)", s2 ? `${fmt(s2.qa_total_kn_mm, 2)} kN/mm` : `${fmt(st.qa_n_m / 1e6, 2)} MN/m`],
@@ -909,6 +919,7 @@ export function TorsionalPage(c: Ctx) {
       <p className="lead">Train torsional analysis in the order of an API 617 / API 684 / API 671 vendor report: model, natural frequencies,
         Campbell diagram, mode shapes, separation margins, steady-state resonant stresses and coupling Goodman check, VSD harmonics and
         motor short-circuit transients.</p>
+      <RDReports c={c} kinds={[["torsional", "Torsional analysis report (PDF)"]]} />
 
       <div className="card"><h3>1. Train model</h3>
         <Proves>Shows which rotors, couplings and gear mesh make up the model, with the inertias and stiffnesses that set every result below.</Proves>
@@ -944,6 +955,15 @@ export function TorsionalPage(c: Ctx) {
           ...cb.excitations.map((e: Json, i: number) => ({ x: cb.speed_pct, y: e.cpm, name: e.name, mode: "lines", line: { color: SERIES[i % 8], width: 1.5 } }))]}
           layout={{ xaxis: { title: "Speed (% of rated)", range: [0, 120] }, yaxis: { title: "Frequency (cpm)", range: [0, maxCpm] },
             shapes: [...rangeShapes, ...cb.excitations.filter((e: Json) => e.band_cpm).map((e: Json) => ({ type: "rect", x0: 0, x1: 120, y0: e.band_cpm[0], y1: e.band_cpm[1], fillcolor: SERIES[2], opacity: 0.12 }))] }} />
+      </div>
+
+      <div className="card" style={{ marginTop: 14 }}><h3>3b. Campbell diagram in absolute values</h3>
+        <Proves>The same diagram against compressor speed in rpm and frequency in Hz, as asked for in reviews of vendor reports.</Proves>
+        <Plot height={380} data={[...cb.tnf_cpm.map((f: number, i: number) => ({ x: [0, 1.2 * r.sizing.speed_rpm], y: [f / 60, f / 60], name: `TNF ${i + 1}`, mode: "lines", showlegend: false,
+          line: { color: "#2b3440", dash: "dash", width: 1 } })),
+          ...cb.excitations.map((e: Json, i: number) => ({ x: cb.speed_pct.map((p: number) => p / 100 * r.sizing.speed_rpm), y: e.cpm.map((v: number) => v / 60), name: e.name, mode: "lines", line: { color: SERIES[i % 8], width: 1.5 } }))]}
+          layout={{ xaxis: { title: "Compressor speed (rpm)" }, yaxis: { title: "Frequency (Hz)", range: [0, maxCpm / 60] },
+            shapes: cb.operating_pct.map((p: number) => ({ type: "line", x0: p / 100 * r.sizing.speed_rpm, x1: p / 100 * r.sizing.speed_rpm, yref: "paper", y0: 0, y1: 1, line: { color: SERIES[2], dash: "dot" } })) }} />
       </div>
 
       <div className="card" style={{ marginTop: 14 }}><h3>4. Mode shapes</h3>

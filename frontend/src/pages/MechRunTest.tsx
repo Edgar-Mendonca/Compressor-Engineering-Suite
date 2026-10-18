@@ -4,6 +4,7 @@ import { LiveChart } from "../components/LiveChart";
 import { Plot, SERIES } from "../components/Plot";
 import { safeName, saveFrom, toast } from "../files";
 import { Summary, svgToPng, TagsPanel, useTags } from "../components/testTags";
+import { layout, TagCard, TrainScene, type TrainSpec } from "../components/TrainScene";
 
 // Mechanical running test (API 617 9th ed. 8.3.2 / 8.3.3), backend testing/mrt.py: test train,
 // speed-time plan with the lube-oil sequences, predicted probe response along the plan, acceptance,
@@ -52,10 +53,6 @@ export function Box({ x, y, w, h, c, d = 12, children }: { x: number; y: number;
     <polygon points={`${x + w},${y} ${x + w + d},${y - d * 0.7} ${x + w + d},${y + h - d * 0.7} ${x + w},${y + h}`} fill={c[2]} stroke="#1d2733" strokeWidth=".8" />
     <rect x={x} y={y} width={w} height={h} fill={c[1]} stroke="#1d2733" strokeWidth=".8" />{children}</g>;
 }
-/** Spinning shaft segment: a stripe pattern moving with the shaft angle. */
-const Shaft = ({ x1, x2, y, r, pat }: { x1: number; x2: number; y: number; r: number; pat: string }) =>
-  <g><rect x={x1} y={y - r} width={x2 - x1} height={2 * r} fill="url(#gSteel)" /><rect x={x1} y={y - r} width={x2 - x1} height={2 * r} fill={`url(#${pat})`} opacity=".55" /></g>;
-
 export function Gear({ cx, cy, r, teeth, ang, fill }: { cx: number; cy: number; r: number; teeth: number; ang: number; fill: string }) {
   const p: string[] = [];
   for (let i = 0; i < teeth * 2; i++) { const a = (i * Math.PI) / teeth; const rr = i % 2 ? r : r * 0.88; p.push(`${cx + rr * Math.cos(a)},${cy + rr * Math.sin(a)}`); }
@@ -91,6 +88,7 @@ function TrainAnim({ d, T, still, svgRef }: { d: Json; T: TFn; still?: boolean; 
   const t0 = still ? (plan.segments.find((q: Json) => q.phase === "run4h" && q.n0_rpm === q.n1_rpm)?.t0_min ?? 0) + 20 : 0;
   const t = useRef(t0), phi = useRef(0.13), phiD = useRef(0.07), flow = useRef(0), last = useRef(0);
   const [mul, setMul] = useState(120);
+  const [inst, setInst] = useState(true);
   const [playing, setPlaying] = useState(false);
   const [, setFrame] = useState(0);
   const st = useRef({ mul, playing }); st.current = { mul, playing };
@@ -130,43 +128,10 @@ function TrainAnim({ d, T, still, svgRef }: { d: Json; T: TFn; still?: boolean; 
   const axial = n > 50 ? 110 + 45 * fr + 4 * Math.sin(now * 3) : 0;
   const sgv = [0.35 + 0.9 * fr, 0.32 + 0.85 * fr], sgp = 3 + 2 * fr;
 
-  // Layout along x.
-  const Y = geared ? 172 : 196, YD = 196, base = 292;
-  let x = 24;
-  const at: Record<string, [number, number]> = {};
-  const place = (k: string, w: number, gap = 18) => { at[k] = [x, w]; x += w + gap; };
-  if (comps.some((c) => c.kind === "vfd")) place("vfd", 92, 34);
-  place("motor", 230, 0); place("lsc", 64, 0);
-  if (geared) { place("gear", 150, 0); place("hsc", 64, 0); }
-  casings.forEach((_, i) => { place(`cas${i}`, 270, 0); if (i < casings.length - 1) place(`ic${i}`, 56, 0); });
-  const trainEnd = x;
-  place("dgs", 150, 0);
-  const W = x + 30;
-  const stripes = (id: string, p: number) => <pattern id={id} width="10" height="40" patternUnits="userSpaceOnUse" patternTransform={`translate(0 ${(p * 4 * 10) % 40})`}>
-    <rect width="10" height="40" fill="none" /><path d="M0 0 L10 10 M0 20 L10 30" stroke="#1d2733" strokeWidth="3" /></pattern>;
-  const fins = (x0: number, w: number, y0: number, h: number) => Array.from({ length: Math.floor(w / 8) }, (_, i) => <line key={i} x1={x0 + 4 + i * 8} x2={x0 + 4 + i * 8} y1={y0} y2={y0 + h} stroke="#0a3d73" strokeWidth="2.2" opacity=".8" />);
-  const probe = (cx: number, cy: number, name: string, side: 1 | -1) => {
-    const v = vib[name], r = v / lim, col = level(r);
-    const ang = side > 0 ? -45 : -135, rad = (ang * Math.PI) / 180;
-    const [px, py] = [cx + 30 * Math.cos(rad), cy + 30 * Math.sin(rad)];
-    return <g key={name}><line x1={cx + 14 * Math.cos(rad)} y1={cy + 14 * Math.sin(rad)} x2={px} y2={py} stroke="#2b3542" strokeWidth="4" />
-      <circle cx={px} cy={py} r="4.5" fill={col} stroke="#1d2733" className={r > 0.85 ? "blink" : ""} /></g>;
-  };
-  const tag = (x0: number, y0: number, lines: [string, string, string][]) => <g transform={`translate(${x0} ${y0})`}>
-    <rect width="146" height={6 + lines.length * 13} rx="2" fill="var(--panel)" stroke="var(--line-2)" opacity=".96" />
-    {lines.map(([k, v, c], i) => <g key={k}><circle cx="8" cy={11 + i * 13} r="3" fill={c} /><text x="15" y={14 + i * 13} className="mrt-tag">{k}</text>
-      <text x="140" y={14 + i * 13} className="mrt-tag" textAnchor="end">{v}</text></g>)}</g>;
-  const housing = (cx: number, y: number, label: string, p: string) => <g>
-    <Box x={cx - 20} y={y - 30} w={40} h={58} c={["#a9b6c4", "#8996a6", "#6c7889"]} d={8} />
-    {probe(cx, y - 26, `${p}-X`, 1)}{probe(cx, y - 26, `${p}-Y`, -1)}
-    <text x={cx} y={y - 66} textAnchor="middle" className="mrt-lab">{label}</text></g>;
-  const pipeIn = (xx: number, y2: number) => <path d={`M${xx} ${base - 12} V${y2}`} className="oil sup" strokeDashoffset={-flow.current} />;
-  const pipeOut = (xx: number, y2: number) => <path d={`M${xx + 8} ${y2} V${base - 4}`} className="oil drn" strokeDashoffset={-flow.current * 0.6} />;
-  const bearings: number[] = [];
-  const [mx, mw] = at.motor;
-  bearings.push(mx + 14, mx + mw - 14);
-
-  const bodyC = n > 0 ? "" : "idle";
+  const spec: TrainSpec = useMemo(() => ({ vfd: comps.some((c) => c.kind === "vfd"), geared, casings: Math.max(casings.length, 1), turbine: comps.some((c) => c.kind === "turbine"),
+    names: { driver: comps.find((c) => c.kind === "motor" || c.kind === "turbine")?.name, gear: geared ? `i = ${fmt(ratio, 3)}` : undefined,
+      casing: casings.map((c) => `${c.source} rotor`) } }), [comps, geared, ratio, casings]);
+  const A = useMemo(() => layout(spec), [spec]);
   const mini = useMemo(() => {
     const k = Math.max(1, Math.floor(plan.t_min.length / 400));
     const pts = plan.t_min.filter((_: number, i: number) => i % k === 0).map((tt: number, i: number) => [tt, plan.speed_rpm[i * k]]);
@@ -174,127 +139,24 @@ function TrainAnim({ d, T, still, svgRef }: { d: Json; T: TFn; still?: boolean; 
   }, [plan]);
   const MX = (tt: number) => 8 + (tt / dur) * 344, MY = (v: number) => 88 - (v / (sp.trip_rpm * 1.08)) * 80;
 
+  const c0 = A.casings[0], [gx] = A.dgs, [mx, mw] = A.motor;
+  const pcol = (k: string) => (k.endsWith("Z") ? level(axial / 500) : level((vib[k] ?? 0) / lim));
   const stage = (
-        <svg ref={svgRef} viewBox={`0 0 ${W} 412`} className={`mrt-stage ${bodyC}`} role="img" aria-label="Mechanical running test train">
-          <defs>
-            {[["gSteel", "#e3e8ee", "#8e9aa8", "#58636f"], ["gMotor", "#5f97d6", "#1a5aa6", "#0d3a6e"], ["gCas", "#a7c0cf", "#5e8197", "#34505f"],
-              ["gHead", "#93a7b8", "#5a6d7e", "#38464f"], ["gGuard", "#ffd27a", "#e69f00", "#a86d00"], ["gGear", "#9aa6b3", "#6b7785", "#4a5562"],
-              ["gTank", "#c9b48a", "#9a7e4d", "#6b5530"]].map(([id, a, b, c]) =>
-              <linearGradient key={id} id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={a} /><stop offset=".45" stopColor={b} /><stop offset="1" stopColor={c} /></linearGradient>)}
-            {stripes("pD", phiD.current)}{stripes("pC", phi.current)}
-            <radialGradient id="gShadow"><stop offset="0" stopColor="#000" stopOpacity=".25" /><stop offset="1" stopColor="#000" stopOpacity="0" /></radialGradient>
-            <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0 H0 V40" fill="none" stroke="var(--line)" strokeWidth=".6" /></pattern>
-          </defs>
-          <rect width={W} height="412" fill="url(#grid)" />
-          {/* baseplate */}
-          <ellipse cx={W / 2} cy={base + 30} rx={W / 2} ry="16" fill="url(#gShadow)" />
-          <Box x={at.motor[0] - 10} y={base} w={trainEnd - at.motor[0] + 4} h={20} c={["#9aa3ad", "#6f7883", "#4d555e"]} d={16} />
-          {comps.some((c) => c.kind === "vfd") && <g>
-            <Box x={at.vfd[0]} y={92} w={at.vfd[1]} h={220} c={["#7f8b99", "#48525f", "#323a44"]} d={14}>
-              <rect x={at.vfd[0] + 8} y={102} width={at.vfd[1] / 2 - 10} height={200} fill="none" stroke="#2a313a" />
-              <rect x={at.vfd[0] + at.vfd[1] / 2 + 2} y={102} width={at.vfd[1] / 2 - 10} height={200} fill="none" stroke="#2a313a" />
-              <rect x={at.vfd[0] + 14} y={114} width={58} height={26} fill="#0b1220" />
-              <text x={at.vfd[0] + 43} y={131} textAnchor="middle" className="mrt-lcd">{fmt((n / ratio) / 60 * 1, 1)} Hz</text>
-              <circle cx={at.vfd[0] + 20} cy={152} r="3.5" fill={n > 0 ? "#2ecc71" : "#55606c"} /><circle cx={at.vfd[0] + 32} cy={152} r="3.5" fill={playing ? "#f1c40f" : "#55606c"} />
-              {Array.from({ length: 6 }, (_, i) => <line key={i} x1={at.vfd[0] + 16} x2={at.vfd[0] + 40} y1={250 + i * 6} y2={250 + i * 6} stroke="#2a313a" strokeWidth="2" />)}
-            </Box>
-            <text x={at.vfd[0] + at.vfd[1] / 2} y={330} textAnchor="middle" className="mrt-lab">VFD ({comps[0].source})</text>
-            <path d={`M${at.vfd[0] + at.vfd[1]} 120 C ${at.vfd[0] + at.vfd[1] + 30} 120, ${at.motor[0] + 60} 100, ${at.motor[0] + 90} ${YD - 72}`} stroke="#1d2733" strokeWidth="5" fill="none" />
-          </g>}
-          {/* driver */}
-          <Shaft x1={mx + mw - 20} x2={at.lsc[0] + at.lsc[1] + 10} y={YD} r={9} pat="pD" />
-          <rect x={mx + 18} y={YD + 48} width={22} height={base - YD - 48} fill="#4d555e" /><rect x={mx + mw - 40} y={YD + 48} width={22} height={base - YD - 48} fill="#4d555e" />
-          <rect x={mx} y={YD - 50} width={18} height={100} rx="5" fill="url(#gHead)" stroke="#1d2733" />
-          {Array.from({ length: 5 }, (_, i) => <line key={i} x1={mx + 3} x2={mx + 15} y1={YD - 36 + i * 18} y2={YD - 36 + i * 18} stroke="#1d2733" />)}
-          <Cyl x={mx + 18} y={YD} w={mw - 40} h={112} g="gMotor" rx={8} />
-          {fins(mx + 24, mw - 52, YD - 56, 112)}
-          <rect x={mx + mw - 22} y={YD - 44} width={16} height={88} rx="4" fill="url(#gHead)" stroke="#1d2733" />
-          <Box x={mx + mw / 2 - 30} y={YD - 82} w={60} h={26} c={["#6f9fd8", "#2a66ac", "#164479"]} d={8} />
-          <text x={mx + mw / 2} y={YD + 6} textAnchor="middle" className="mrt-name">MOTOR</text>
-          <text x={mx + mw / 2} y={330} textAnchor="middle" className="mrt-lab">{comps.find((c) => c.kind === "motor" || c.kind === "turbine")?.name}</text>
-          {/* LS (or only) coupling with guard */}
-          {(() => { const [cx, cw] = at.lsc, yy = geared ? YD : Y; return <g>
-            <rect x={cx + 6} y={yy - 22} width={14} height={44} fill="url(#gSteel)" stroke="#1d2733" /><rect x={cx + cw - 20} y={yy - 22} width={14} height={44} fill="url(#gSteel)" stroke="#1d2733" />
-            <rect x={cx + 6} y={yy - 22} width={14} height={44} fill={`url(#${geared ? "pD" : "pC"})`} opacity=".5" /><rect x={cx + cw - 20} y={yy - 22} width={14} height={44} fill={`url(#${geared ? "pD" : "pC"})`} opacity=".5" />
-            <rect x={cx + 2} y={yy - 30} width={cw - 4} height={60} rx="12" fill="url(#gGuard)" opacity=".42" stroke="#a86d00" />
-            <text x={cx + cw / 2} y={yy - 38} textAnchor="middle" className="mrt-lab">{geared ? "LS cpl" : "Coupling"}</text></g>; })()}
-          {geared && (() => { const [gx, gw] = at.gear; const ang = phiD.current * 360, angP = -phi.current * 360; return <g>
-            <Shaft x1={gx + gw - 10} x2={at.hsc[0] + at.hsc[1] + 10} y={Y} r={7} pat="pC" />
-            <Box x={gx} y={YD - 70} w={gw} h={base - YD + 70} c={["#a4afbb", "#76828f", "#56616d"]} d={14}>
-              <rect x={gx + 14} y={YD - 58} width={gw - 28} height={120} rx="6" fill="#1d2733" opacity=".85" />
-              <Gear cx={gx + gw * 0.42} cy={YD} r={44} teeth={28} ang={ang} fill="url(#gGear)" />
-              <Gear cx={gx + gw * 0.42 + 44 + 15} cy={Y} r={17} teeth={11} ang={angP} fill="#c4ccd6" />
-              <rect x={gx + 14} y={YD - 58} width={gw - 28} height={120} rx="6" fill="none" stroke="#e69f00" strokeDasharray="5 3" />
-            </Box>
-            <text x={gx + gw / 2} y={330} textAnchor="middle" className="mrt-lab">Gearbox i = {fmt(ratio, 2)}</text>
-            <text x={gx + gw / 2} y={343} textAnchor="middle" className="mrt-lab">{fmt(n / ratio, 0)} / {fmt(n, 0)} rpm</text>
-            {(() => { const [cx, cw] = at.hsc; return <g>
-              <rect x={cx + 6} y={Y - 18} width={12} height={36} fill="url(#gSteel)" stroke="#1d2733" /><rect x={cx + cw - 18} y={Y - 18} width={12} height={36} fill="url(#gSteel)" stroke="#1d2733" />
-              <rect x={cx + 6} y={Y - 18} width={12} height={36} fill="url(#pC)" opacity=".5" /><rect x={cx + cw - 18} y={Y - 18} width={12} height={36} fill="url(#pC)" opacity=".5" />
-              <rect x={cx + 2} y={Y - 26} width={cw - 4} height={52} rx="10" fill="url(#gGuard)" opacity=".42" stroke="#a86d00" />
-              <text x={cx + cw / 2} y={Y - 34} textAnchor="middle" className="mrt-lab">HS cpl</text></g>; })()}
-          </g>; })()}
-          {/* compressor casing(s) */}
-          {casings.map((_c, i) => { const [cx, cw] = at[`cas${i}`]; const b1 = cx + 26, b2 = cx + cw - 26; bearings.push(b1, b2); return <g key={i}>
-            <Shaft x1={cx - 10} x2={cx + cw + (i < casings.length - 1 ? 10 : -6)} y={Y} r={7} pat="pC" />
-            <rect x={cx + 56} y={Y + 50} width={18} height={base - Y - 50} fill="#4d555e" /><rect x={cx + cw - 74} y={Y + 50} width={18} height={base - Y - 50} fill="#4d555e" />
-            <rect x={cx + 44} y={Y - 64} width={26} height={128} rx="6" fill="url(#gHead)" stroke="#1d2733" />
-            <rect x={cx + cw - 70} y={Y - 64} width={26} height={128} rx="6" fill="url(#gHead)" stroke="#1d2733" />
-            <Cyl x={cx + 66} y={Y} w={cw - 132} h={116} g="gCas" rx={10} />
-            {Array.from({ length: 7 }, (_, k) => <circle key={k} cx={cx + 57} cy={Y - 54 + k * 18} r="2.2" fill="#2b3542" />)}
-            {Array.from({ length: 7 }, (_, k) => <circle key={k} cx={cx + cw - 57} cy={Y - 54 + k * 18} r="2.2" fill="#2b3542" />)}
-            {[[cx + 96, "SUCTION"], [cx + cw - 124, "DISCH."]].map(([nx, l]) => <g key={l as string}>
-              <rect x={(nx as number)} y={Y - 106} width={28} height={50} fill="url(#gCas)" stroke="#1d2733" />
-              <rect x={(nx as number) - 8} y={Y - 114} width={44} height={10} fill="url(#gHead)" stroke="#1d2733" />
-              <text x={(nx as number) + 14} y={Y - 120} textAnchor="middle" className="mrt-lab">{l}</text></g>)}
-            <text x={cx + cw / 2} y={Y + 5} textAnchor="middle" className="mrt-name">CASING {i + 1}</text>
-            {housing(b1, Y, "DE journal", "V1")}{housing(b2, Y, "NDE journal + thrust", "V2")}
-            {/* keyphasor at the DE shaft and axial probes A / B on the thrust collar */}
-            <g><line x1={b1 + 34} y1={Y + 36} x2={b1 + 34} y2={Y + 9} stroke="#2b3542" strokeWidth="4" /><polygon points={`${b1 + 30},${Y + 8} ${b1 + 38},${Y + 8} ${b1 + 34},${Y + 3}`} fill="#e0a020" />
-              <text x={b1 + 34} y={Y + 48} textAnchor="middle" className="mrt-lab">{T("KPH")}</text></g>
-            {[0, 1].map((j) => <g key={j}><line x1={cx + cw - 6 + 14} y1={Y - 12 + j * 24} x2={cx + cw - 6 + 2} y2={Y - 4 + j * 8} stroke="#2b3542" strokeWidth="3.5" />
-              <circle cx={cx + cw - 6 + 15} cy={Y - 13 + j * 26} r="4" fill={level(axial / 500)} stroke="#1d2733" />
-              <text x={cx + cw + 14} y={Y - 18 + j * 40} className="mrt-lab">{T(j ? "V6-Z" : "V5-Z")}</text></g>)}
-            <rect x={b2 + 16} y={Y - 6} width={10} height={12} fill="#2b3542" />
-            <text x={cx + cw / 2} y={330} textAnchor="middle" className="mrt-lab">Casing {i + 1} ({casings[i].source}) · {fmt(n, 0)} rpm</text>
-            <text x={cx + cw / 2} y={343} textAnchor="middle" className="mrt-lab">X/Y probes 45° from TDC · axial at thrust collar</text>
-          </g>; })}
-          {/* oil console and piping */}
-          <g>
-            <path d={`M140 ${base - 12} H${x - 30}`} className="oil sup" strokeDashoffset={-flow.current} />
-            <path d={`M${x - 22} ${base - 4} H140`} className="oil drn" strokeDashoffset={-flow.current * 0.6} />
-            {bearings.map((bx, i) => <g key={i}>{pipeIn(bx - 4, (i < 2 ? YD : Y) + 28)}{pipeOut(bx - 4, (i < 2 ? YD : Y) + 28)}</g>)}
-            <path d={`M140 ${base - 12} V354`} className="oil sup" strokeDashoffset={-flow.current} />
-            <path d={`M132 ${base - 4} V354`} className="oil drn" strokeDashoffset={-flow.current * 0.6} />
-            <Box x={40} y={340} w={160} h={44} c={["#d7c8a6", "#a88a55", "#7a6237"]} d={10}>
-              <text x={120} y={366} textAnchor="middle" className="mrt-name small">LUBE OIL CONSOLE</text></Box>
-            <Cyl x={210} y={360} w={46} h={22} g="gMotor" /><rect x={262} y={340} width={14} height={40} rx="6" fill="url(#gSteel)" stroke="#1d2733" />
-            <rect x={282} y={340} width={14} height={40} rx="6" fill="url(#gSteel)" stroke="#1d2733" />
-            <text x={306} y={354} className="mrt-lab" textAnchor="start">supply → (blue) / drain ← (orange)</text>
-          </g>
-          {/* dry gas seal panel: seal gas to both seals, primary vents back to the panel */}
-          {casings.length > 0 && (() => { const [gx] = at.dgs, [cx, cw] = at[`cas${casings.length - 1}`], [c0] = at.cas0; return <g>
-            <Box x={gx + 6} y={120} w={104} h={150} c={["#a596cf", "#6c5a9c", "#4c3d78"]} d={12}>
-              <text x={gx + 58} y={140} textAnchor="middle" className="mrt-name small" fill="#fff">DGS PANEL</text>
-              {[0, 1, 2].map((j) => <g key={j}><circle cx={gx + 34 + j * 24} cy={168} r="9" fill="#ece8f6" stroke="#2b2350" /><line x1={gx + 34 + j * 24} y1={168} x2={gx + 34 + j * 24 + 6 * Math.cos(now * 2 + j)} y2={168 - 6 * Math.abs(Math.sin(now * 2 + j))} stroke="#c0392b" strokeWidth="1.5" /></g>)}
-              <rect x={gx + 18} y={190} width={80} height={8} rx="2" fill="#2b2350" /><rect x={gx + 18} y={206} width={80} height={8} rx="2" fill="#2b2350" /></Box>
-            {[[c0 + 40, "#e69f00"], [cx + cw - 40, "#e69f00"]].map(([xx, c], j) => <g key={j}>
-              <path d={`M${gx + 6} ${150 + j * 10} H${(xx as number) + (j ? 0 : 0)} V${Y - 58}`} className="oil" stroke={c as string} strokeWidth="2.6" strokeDashoffset={-flow.current * 0.8} fill="none" opacity=".85" />
-              <path d={`M${(xx as number) + 8} ${Y - 58} V${110 - j * 8} H${gx + 6}`} className="oil" stroke="#56b4e9" strokeWidth="2.2" strokeDashoffset={flow.current * 0.5} fill="none" opacity=".75" /></g>)}
-            <text x={gx + 58} y={284} textAnchor="middle" className="mrt-lab">seal gas → (orange)</text>
-            <text x={gx + 58} y={296} textAnchor="middle" className="mrt-lab">vents ← (blue)</text>
-          </g>; })()}
-          {/* live tags */}
-          {casings.length > 0 && (() => { const [cx, cw] = at.cas0, [gx] = at.dgs; return <>
-            {tag(cx - 150, 18, [[T("V1-X"), `${fmt(vib["V1-X"], 1)} µm`, level(vib["V1-X"] / lim)], [T("V1-Y"), `${fmt(vib["V1-Y"], 1)} µm`, level(vib["V1-Y"] / lim)],
-              [T("Bearing 1"), `${fmt(btemp[0]?.[1], 0)} °C`, tlevel(btemp[0]?.[1] ?? 0, d.bearing_temp_limit_c)], [T("TD1"), `${fmt(n > 50 ? drain[0] : oilT, 1)} °C`, "#3d8fd6"]])}
-            {tag(cx + cw - 100, 18, [[T("V2-X"), `${fmt(vib["V2-X"], 1)} µm`, level(vib["V2-X"] / lim)], [T("V2-Y"), `${fmt(vib["V2-Y"], 1)} µm`, level(vib["V2-Y"] / lim)],
-              [T("Bearing 2"), `${fmt(btemp[1]?.[1], 0)} °C`, tlevel(btemp[1]?.[1] ?? 0, d.bearing_temp_limit_c)], [T("Thrust (active)"), `${fmt(btemp[2]?.[1], 0)} °C`, tlevel(btemp[2]?.[1] ?? 0, d.bearing_temp_limit_c)],
-              [T("V5-Z"), `${fmt(axial, 0)} µm`, level(axial / 500)]])}
-            {tag(gx - 14, 310, [[T("SG_DE"), `${fmt(n > 50 ? sgv[0] : 0.2, 2)} Nm³/h`, "#56b4e9"], [T("SG_NDE"), `${fmt(n > 50 ? sgv[1] : 0.2, 2)} Nm³/h`, "#56b4e9"], [T("SG_P"), `${fmt(sgp, 1)} barg`, "#e69f00"]])}
-            {tag(300, 364, [[T("T_oil"), `${fmt(oilT, 1)} °C`, "#3d8fd6"], [T("P_oil"), `${fmt(oilP, 2)} barg`, "#3d8fd6"]])}
-            {tag(cx + cw / 2 - 73, 352, [[T("N1"), `${fmt(n, 0)} rpm`, "var(--accent)"]])}</>; })()}
-        </svg>);
+    <TrainScene id={still ? "trc" : "tr"} t={spec} a={A} phiD={phiD.current} phiC={phi.current} flow={flow.current} running={n > 50} hz={n / ratio / 60}
+      probe={pcol} svgRef={svgRef} over={!inst && !still ? undefined : <g>
+        <TagCard x={mx + 20} y={16} title="Driver" w={180} to={[mx + mw / 2, A.YD - 100]} rows={[[T("N1"), `${fmt(n, 0)} rpm`, "#0b5cad"], ["VFD", `${fmt(n / ratio / 60, 1)} Hz`, "#5b6878"]]} />
+        <TagCard x={c0.x - 16} y={16} title="Drive-end journal" w={180} to={[c0.de, A.Y - 52]} rows={[[T("V1-X"), `${fmt(vib["V1-X"], 1)} µm`, level(vib["V1-X"] / lim)],
+          [T("V1-Y"), `${fmt(vib["V1-Y"], 1)} µm`, level(vib["V1-Y"] / lim)], [T("Bearing 1"), `${fmt(btemp[0]?.[1], 0)} °C`, tlevel(btemp[0]?.[1] ?? 0, d.bearing_temp_limit_c)],
+          [T("TD1"), `${fmt(n > 50 ? drain[0] : oilT, 1)} °C`, "#d17a2a"]]} />
+        <TagCard x={c0.x + c0.w / 2 + 12} y={16} title="Non-drive end + thrust" w={180} to={[c0.nde, A.Y - 52]} rows={[[T("V2-X"), `${fmt(vib["V2-X"], 1)} µm`, level(vib["V2-X"] / lim)],
+          [T("V2-Y"), `${fmt(vib["V2-Y"], 1)} µm`, level(vib["V2-Y"] / lim)], [T("Bearing 2"), `${fmt(btemp[1]?.[1], 0)} °C`, tlevel(btemp[1]?.[1] ?? 0, d.bearing_temp_limit_c)],
+          [T("Thrust (active)"), `${fmt(btemp[2]?.[1], 0)} °C`, tlevel(btemp[2]?.[1] ?? 0, d.bearing_temp_limit_c)], [T("V5-Z"), `${fmt(axial, 0)} µm`, level(axial / 500)]]} />
+        <TagCard x={gx - 30} y={16} title="Seal gas" w={176} to={[gx + 60, A.Y - 110]} rows={[[T("SG_DE"), `${fmt(n > 50 ? sgv[0] : 0.2, 2)} Nm³/h`, "#56b4e9"],
+          [T("SG_NDE"), `${fmt(n > 50 ? sgv[1] : 0.2, 2)} Nm³/h`, "#56b4e9"], [T("SG_P"), `${fmt(sgp, 1)} barg`, "#e69f00"]]} />
+        <TagCard x={A.console[0]} y={A.console[1] - 120} title="Lube oil" w={176} to={[A.console[0] + 90, A.console[1] - 6]} rows={[[T("T_oil"), `${fmt(oilT, 1)} °C`, "#3d8fd6"],
+          [T("P_oil"), `${fmt(oilP, 2)} barg`, "#3d8fd6"], [T("TD2"), `${fmt(n > 50 ? drain[1] : oilT, 1)} °C`, "#d17a2a"]]} />
+        {nearCrit && <g><rect x={c0.x + 70} y={A.Y + 96} width={c0.w - 140} height="22" rx="3" fill="#c0392b" opacity=".92" /><text x={c0.x + c0.w / 2} y={A.Y + 111} textAnchor="middle" className="ts-name">PASSING CRITICAL {Math.round(nearCrit)} RPM</text></g>}
+      </g>} />);
   if (still) return stage;
   return (
     <div className="mrt-anim">
@@ -307,6 +169,7 @@ function TrainAnim({ d, T, still, svgRef }: { d: Json; T: TFn; still?: boolean; 
         <div className="mrt-controls">
           <button className="btn primary" onClick={() => { if (t.current >= dur) t.current = 0; setPlaying(!playing); }}>{playing ? "Pause" : now > 0 && now < dur ? "Resume" : "Play test"}</button>
           <button className="btn" onClick={() => { t.current = 0; setPlaying(false); setFrame((k) => k + 1); }}>Reset</button>
+          <button className="btn" onClick={() => setInst(!inst)}>{inst ? "Hide instruments" : "Show instruments"}</button>
           <div className="seg">{MULS.map((m) => <button key={m} className={mul === m ? "on" : ""} onClick={() => setMul(m)}>{m}×</button>)}</div>
           <input type="range" className="mrt-scrub" min={0} max={dur} step={0.25} value={now} onChange={(e) => { t.current = Number(e.target.value); setFrame((k) => k + 1); }} aria-label="Test time" />
           <span className="mono small">{hhmm(now)} of {hhmm(dur)} h:min</span>

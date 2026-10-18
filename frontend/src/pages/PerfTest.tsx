@@ -3,7 +3,7 @@ import { fmt, type Json } from "../api";
 import { LiveChart, type Series } from "../components/LiveChart";
 import { safeName, saveFrom, toast } from "../files";
 import { Summary, svgToPng, TagsPanel, useTags } from "../components/testTags";
-import { Box, Cyl, Gear } from "./MechRunTest";
+import { Arrow, Block, layout, TagCard, TrainScene, type TrainSpec } from "../components/TrainScene";
 
 // Shop performance test to ASME PTC 10-2022, backend testing/ptc10.py: Type 1 / Type 2 test design with
 // every test-gas combination screened, an animated 2.5D closed loop (gas flow, seal-gas system, surge),
@@ -31,13 +31,12 @@ const tcol = (f: number) => { const k = Math.max(0, Math.min(1, f)); return `rgb
 // ---------------------------------------------------------------- animated closed loop
 type Pt = [number, number];
 type TFn = (k: string) => string;
-const PATH: Pt[] = [[668, 228], [668, 120], [880, 120], [880, 54], [292, 54], [292, 150], [536, 150], [536, 228], [536, 300], [668, 300]];
-function along(s: number): { p: Pt; seg: number; f: number } {
-  const L = PATH.slice(1).map((p, i) => Math.hypot(p[0] - PATH[i][0], p[1] - PATH[i][1]));
-  const tot = L.reduce((a, b) => a + b, 0);
-  let d = ((s % 1) + 1) % 1 * tot;
-  for (let i = 0; i < L.length; i++) { if (d <= L[i]) { const f = d / L[i]; return { p: [lerp(PATH[i][0], PATH[i + 1][0], f), lerp(PATH[i][1], PATH[i + 1][1], f)], seg: i, f }; } d -= L[i]; }
-  return { p: PATH[0], seg: 0, f: 0 };
+/** Point at fraction s (0..1, wrapping) along a polyline, with the segment index and its local fraction. */
+function along(P: Pt[], s: number): { p: Pt; seg: number; f: number } {
+  const L = P.slice(1).map((p, i) => Math.hypot(p[0] - P[i][0], p[1] - P[i][1]));
+  let d = ((s % 1) + 1) % 1 * L.reduce((x, y) => x + y, 0);
+  for (let i = 0; i < L.length; i++) { if (d <= L[i]) { const f = d / L[i]; return { p: [lerp(P[i][0], P[i + 1][0], f), lerp(P[i][1], P[i + 1][1], f)], seg: i, f }; } d -= L[i]; }
+  return { p: P[0], seg: 0, f: 0 };
 }
 const smooth = (f: number) => f * f * (3 - 2 * f);
 const MULS = [10, 30, 60, 120, 300];
@@ -102,11 +101,8 @@ function stateAt(t: number, seq: Ev[], lines: Json[], tm: number): { op: Op; ev:
   return { op, ev, f };
 }
 
-const Tg = ({ x, y, t, v, c = "#0b5cad", w = 112 }: { x: number; y: number; t: string; v: string; c?: string; w?: number }) => <g transform={`translate(${x} ${y})`}>
-  <rect width={w} height="17" rx="2" fill="var(--panel)" stroke="var(--line-2)" opacity=".96" /><rect width="4" height="17" fill={c} />
-  <text x="8" y="12" className="pt-tagt" fill={c}>{t}</text><text x={w - 5} y="12" textAnchor="end" className="mrt-tag">{v}</text></g>;
-
-function LoopAnim({ s, d, T, still, svgRef }: { s: Json; d: Json; T: TFn; still?: boolean; svgRef?: (e: SVGSVGElement | null) => void }) {
+function LoopAnim({ s, d, T, spec, still, svgRef }: { s: Json; d: Json; T: TFn; spec: TrainSpec; still?: boolean; svgRef?: (e: SVGSVGElement | null) => void }) {
+  const A = useMemo(() => layout(spec, 60), [spec]);
   const lines = useMemo(() => s.lines.filter((l: Json) => l.results?.some((r: Json) => r.test)).map((l: Json) => ({ ...l,
     rs: l.results.map((r: Json, i: number) => ({ ...r, reading: l.readings[i] })).filter((r: Json) => r.test) })), [s]);
   const seq = useMemo(() => buildSeq(lines, s.coastdown?.predicted_s ?? 300), [lines, s]);
@@ -115,6 +111,7 @@ function LoopAnim({ s, d, T, still, svgRef }: { s: Json; d: Json; T: TFn; still?
     return seq.find((e) => e.kind === "record" && e.li === li && e.k === Math.floor((lines[li]?.rs.length ?? 1) / 2))?.t0 ?? 0; }, [seq, lines]);
   const t = useRef(still ? tStill + 1 : 0), tm = useRef(0.4), last = useRef(0), pos = useRef(Array.from({ length: 70 }, (_, i) => i / 70));
   const [mul, setMul] = useState(60);
+  const [inst, setInst] = useState(true);
   const [playing, setPlaying] = useState(false);
   const [, setFrame] = useState(0);
   const st = useRef({ mul }); st.current = { mul };
@@ -143,7 +140,6 @@ function LoopAnim({ s, d, T, still, svgRef }: { s: Json; d: Json; T: TFn; still?
   const recorded: { li: number; r: Json }[] = seq.filter((e) => e.kind === "record" && e.t1 <= now).map((e) => ({ li: e.li, r: lines[e.li].rs[e.k] }));
   const gas = Object.keys(s.test_gas ?? {}).join("/") || "gas";
   const seal = s.seal_gas;
-  const tfrac = (seg: number, g: number) => seg <= 2 ? 1 : seg === 3 ? 1 - g * 0.92 : seg === 8 ? 0 : seg === 9 ? g : 0.08;
   const phi = tm.current * (op.n / 3000);
   const fl = (k: number) => op.fl * [0.9, 0.25, 0.95, 0.45, 0.25, 0.4][k] * 2.2;   // fluctuation % shown for the stability check
   const stableOk = FL.map(([, , lim], k) => fl(k) <= lim);
@@ -151,80 +147,67 @@ function LoopAnim({ s, d, T, still, svgRef }: { s: Json; d: Json; T: TFn; still?
   const hhmm = (m: number) => `${Math.floor(m / 60)}:${String(Math.floor(m % 60)).padStart(2, "0")}`;
   const purity = 95 + 4.6 * Math.min(1, now / 15);
   const sgv = op.n > 50 ? [0.4 + 1.1 * op.p1 / 10, 0.38 + 1.05 * op.p1 / 10] : [0.1, 0.1];
-  const pipe = PATH.slice(0, 8).map((p) => p.join(",")).join(" ");
-  const stage = (
-    <svg ref={svgRef} viewBox="0 0 1000 452" className="mrt-stage" role="img" aria-label="Performance test closed loop">
-      <defs>
-        {[["gSteel", "#e3e8ee", "#8e9aa8", "#58636f"], ["gMotor", "#5f97d6", "#1a5aa6", "#0d3a6e"], ["gCas", "#a7c0cf", "#5e8197", "#34505f"],
-          ["gHead", "#93a7b8", "#5a6d7e", "#38464f"], ["gGear", "#9aa6b3", "#6b7785", "#4a5562"], ["gPipe", "#dfe5ea", "#a3afba", "#6e7a86"]].map(([id, a, b, c]) =>
-          <linearGradient key={id} id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={a} /><stop offset=".45" stopColor={b} /><stop offset="1" stopColor={c} /></linearGradient>)}
-        <pattern id="ptgrid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0 H0 V40" fill="none" stroke="var(--line)" strokeWidth=".6" /></pattern>
-      </defs>
-      <rect width="1000" height="452" fill="url(#ptgrid)" />
-      {/* loop piping */}
-      <polyline points={pipe} fill="none" stroke="#5b6672" strokeWidth="20" strokeLinejoin="round" />
-      <polyline points={pipe} fill="none" stroke="url(#gPipe)" strokeWidth="16" strokeLinejoin="round" />
-      {/* cooler */}
-      <Box x={560} y={32} w={190} h={44} c={["#8fc7b9", "#4f9a88", "#357265"]} d={12}>
-        {Array.from({ length: 16 }, (_, j) => <line key={j} x1={570 + j * 11} x2={570 + j * 11} y1={36} y2={72} stroke="#2e6a5c" strokeWidth="2" />)}
-        <rect x={622} y={46} width={66} height={16} rx="2" fill="#357265" /><text x={655} y={58} textAnchor="middle" className="mrt-name small" fill="#fff">{T("cooler")}</text></Box>
-      <path d="M600 32 V14 H640" fill="none" stroke="#3d8fd6" strokeWidth="3" className="oil" strokeDashoffset={-tm.current * 20} />
-      <path d="M710 32 V14 H670" fill="none" stroke="#d17a2a" strokeWidth="3" className="oil" strokeDashoffset={tm.current * 20} />
-      <text x={655} y={10} textAnchor="middle" className="mrt-lab">cooling water holds {T("t1")}</text>
-      {/* throttle valve and anti-surge recycle */}
-      <g transform="translate(880 88)"><polygon points="-16,-14 16,-14 -16,14 16,14" fill="#e7ebee" stroke="#1d2733" strokeWidth="1.5" transform="rotate(90)" />
-        <rect x="-4" y="-34" width="8" height="20" fill="#5b6672" /><rect x="-16" y="-44" width="32" height="12" rx="3" fill="#0b5cad" /></g>
-      <path d="M880 120 H960 V54 H880" fill="none" stroke={op.asv > 1 ? "#c0392b" : "#a3afba"} strokeWidth="6" strokeDasharray={op.asv > 1 ? "8 6" : undefined} strokeDashoffset={-tm.current * 40} />
-      <g transform="translate(960 88)"><polygon points="-10,-10 10,-10 -10,10 10,10" fill={op.asv > 1 ? "#f6c9c4" : "#e7ebee"} stroke="#1d2733" strokeWidth="1.2" /></g>
-      {/* orifice, gas charging and analyser */}
-      <rect x="412" y="134" width="6" height="32" fill="#0c1a2b" /><text x="415" y="128" textAnchor="middle" className="mrt-lab">FE β {fmt(s.setup.beta, 3)}</text>
-      <Box x={196} y={165} w={52} h={72} c={["#cfd6dc", "#aab4bc", "#87929b"]} d={10}><text x={222} y={206} textAnchor="middle" className="mrt-name small" fill="#0c1a2b">{gas}</text></Box>
-      <path d="M222 165 V150 H292" stroke="#a3afba" strokeWidth="5" fill="none" /><text x={222} y={252} textAnchor="middle" className="mrt-lab">gas charging holds {T("p1")}</text>
-      <Box x={316} y={176} w={44} h={30} c={["#e9e2c8", "#c9b98a", "#a08f5c"]} d={6}><text x={338} y={195} textAnchor="middle" className="mrt-tag" fill="#3a2c12">GC</text></Box>
-      <path d="M338 176 V150" stroke="#a08f5c" strokeWidth="2" strokeDasharray="3 2" />
-      {/* gas particles coloured by temperature */}
-      {op.loopP > 0.05 && pos.current.map((p, j) => { const a = along(p); const inside = a.seg >= 8; return <circle key={j} cx={a.p[0]} cy={a.p[1]} r={inside ? 3 : 4.2}
-        fill={tcol(tfrac(a.seg, a.f))} opacity={(inside ? 0.5 : 0.95) * Math.min(1, op.loopP * 1.5)} />; })}
-      {/* train */}
-      <Box x={30} y={392} w={760} h={18} c={["#9aa3ad", "#6f7883", "#4d555e"]} d={14} />
-      <rect x={250} y={318} width={170} height={10} fill="url(#gSteel)" />
-      <Cyl x={50} y={320} w={180} h={110} g="gMotor" rx={8} />
-      {Array.from({ length: 20 }, (_, j) => <line key={j} x1={58 + j * 8.5} x2={58 + j * 8.5} y1={266} y2={374} stroke="#0a3d73" strokeWidth="2" opacity=".75" />)}
-      <text x={140} y={325} textAnchor="middle" className="mrt-name">MOTOR</text>
-      <Box x={300} y={270} w={110} h={122} c={["#a4afbb", "#76828f", "#56616d"]} d={14}>
-        <rect x={312} y={280} width={86} height={86} rx="6" fill="#1d2733" opacity=".85" />
-        <Gear cx={345} cy={330} r={30} teeth={24} ang={phi * 360 / 6} fill="url(#gGear)" /><Gear cx={385} cy={306} r={11} teeth={9} ang={-phi * 360} fill="#c4ccd6" /></Box>
-      <rect x={410} y={300} width={90} height={9} fill="url(#gSteel)" />
-      <rect x={430} y={290} width={40} height={30} rx="8" fill="#e69f00" opacity=".45" stroke="#a86d00" />
-      <rect x={480} y={244} width={26} height={124} rx="6" fill="url(#gHead)" stroke="#1d2733" />
-      <rect x={700} y={244} width={26} height={124} rx="6" fill="url(#gHead)" stroke="#1d2733" />
-      <Cyl x={504} y={306} w={198} h={116} g="gCas" rx={10} />
-      {[[524, "SUCTION"], [654, "DISCHARGE"]].map(([nx, l]) => <g key={l as string}><rect x={nx as number} y={214} width={28} height={36} fill="url(#gCas)" stroke="#1d2733" />
-        <rect x={(nx as number) - 8} y={206} width={44} height={10} fill="url(#gHead)" stroke="#1d2733" /></g>)}
-      <text x={603} y={311} textAnchor="middle" className="mrt-name">COMPRESSOR</text>
-      {op.surge && <text x={603} y={290} textAnchor="middle" className="mrt-name blink" fill="#c0392b">SURGE</text>}
-      {/* lube console */}
-      <Box x={40} y={418} w={150} h={26} c={["#d7c8a6", "#a88a55", "#7a6237"]} d={8}><text x={115} y={435} textAnchor="middle" className="mrt-name small">LUBE OIL</text></Box>
-      {/* dry gas seal panel */}
-      <Box x={800} y={250} w={110} h={130} c={["#a596cf", "#6c5a9c", "#4c3d78"]} d={12}><text x={855} y={272} textAnchor="middle" className="mrt-name small" fill="#fff">DGS PANEL</text>
-        {[["primary", "#e69f00"], ["secondary", "#56b4e9"], ["buffer", "#2e9e6b"]].map(([kk, c], j) => <g key={kk}>
-          <circle cx={814} cy={292 + j * 26} r="4" fill={c} /><text x={822} y={295 + j * 26} className="mrt-tag" fill="#fff">{kk}: {String(seal?.[kk] ?? "-").slice(0, 14)}</text></g>)}</Box>
-      {[["#e69f00", 0], ["#56b4e9", 6], ["#2e9e6b", 12]].map(([c, o]) => <g key={c as string}>
-        <path d={`M800 ${290 + (o as number) * 2} H${740 + (o as number)} V${300 + (o as number)} H726`} className="gas" stroke={c as string} strokeWidth="3" strokeDashoffset={-tm.current * 30} />
-        <path d={`M${740 + (o as number)} ${300 + (o as number)} V${386 - (o as number)} H${470 - (o as number)} V${300 + (o as number)} H480`} className="gas" stroke={c as string} strokeWidth="2.5" strokeDashoffset={-tm.current * 30} opacity=".7" /></g>)}
-      {/* live instrument tags */}
-      <Tg x={420} y={180} t={T("p1")} v={`${fmt(op.p1, 3)} bara`} /><Tg x={420} y={200} t={T("t1")} v={`${fmt(op.t1, 2)} °C`} />
-      <Tg x={692} y={180} t={T("p2")} v={`${fmt(op.p2, 3)} bara`} c="#c0392b" /><Tg x={692} y={200} t={T("t2")} v={`${fmt(op.t2, 2)} °C`} c="#c0392b" />
-      <Tg x={168} y={86} t={T("dp")} v={`${fmt(op.dp, 2)} kPa`} /><Tg x={168} y={106} t={T("tu")} v={`${fmt(op.t1, 1)} °C`} />
-      <Tg x={794} y={130} t={T("valve")} v={`${fmt(op.valve, 0)} % open`} c="#2e9e6b" /><Tg x={870} y={24} t={T("asv")} v={`${fmt(op.asv, 0)} %`} c={op.asv > 1 ? "#c0392b" : "#5b6878"} w={110} />
-      <Tg x={760} y={86} t={T("cooler")} v={`${fmt(op.w * 0.92, 0)} kW`} c="#2e9e6b" w={100} />
-      <Tg x={196} y={262} t={T("gas")} v={`${gas} ${fmt(purity, 1)} %`} c="#a08f5c" w={130} />
-      <Tg x={44} y={212} t={T("N1")} v={`${fmt(op.n, 0)} rpm`} c="var(--accent)" /><Tg x={44} y={192} t={T("power")} v={`${fmt(op.w, 0)} kW`} c="var(--accent)" />
-      <Tg x={196} y={420} t={T("T_oil")} v="45.0 °C" c="#3d8fd6" w={124} /><Tg x={326} y={420} t={T("P_oil")} v={`${fmt(op.n > 50 ? 1.6 : 0.2, 2)} barg`} c="#3d8fd6" w={124} />
-      <Tg x={800} y={386} t={T("SG_DE")} v={`${fmt(sgv[0], 2)} Nm³/h`} c="#56b4e9" w={130} /><Tg x={800} y={406} t={T("SG_NDE")} v={`${fmt(sgv[1], 2)} Nm³/h`} c="#56b4e9" w={130} />
-      <Tg x={800} y={426} t={T("SG_P")} v={`${fmt(op.p1 + 1.5, 2)} bara`} c="#e69f00" w={130} />
-      {op.rec && <g><rect x="504" y="180" width="198" height="20" rx="3" fill="#0b5cad" opacity=".9" /><text x="603" y="194" textAnchor="middle" className="mrt-name" style={{ fontSize: 10 }}>● RECORDING {lines[li].rs[ev.k].point}</text></g>}
-    </svg>);
+  // closed loop over the train: discharge -> throttle valve -> cooler -> orifice -> suction
+  const c0 = A.casings[0], [gx] = A.dgs, [mx, mw] = A.motor;
+  const [sx, sy] = c0.suction, [dx] = c0.discharge;
+  const yA = 134, yT = 54, xR = gx + 96, xL = mx + 10, cx0 = (A.gear?.[0] ?? mx + mw) - 40, cx1 = cx0 + 230, fe = sx - 150;
+  const LOOP: Pt[] = [[dx, sy], [dx, yA], [xR, yA], [xR, yT], [xL, yT], [xL, yA], [sx, yA], [sx, sy]];
+  const hot = (seg: number, x: number) => seg <= 2 ? 1 : seg === 3 ? Math.max(0, Math.min(1, (x - cx0) / (cx1 - cx0))) : 0;
+  const pts = LOOP.map((p) => p.join(",")).join(" ");
+  const gid = still ? "ptc" : "pt";
+  const loop = <g>
+    <polyline points={pts} className="ts-pipe" stroke="#3b4652" strokeWidth="22" />
+    <polyline points={pts} className="ts-pipe" stroke="#c9d1d8" strokeWidth="17" />
+    <polyline points={pts} className="ts-pipe" stroke="#eef2f5" strokeWidth="4" opacity=".7" transform="translate(-3 -3)" />
+    {/* gas flow coloured by temperature */}
+    {op.loopP > 0.05 && pos.current.map((p, j) => { const q = along(LOOP, p); return <circle key={j} cx={q.p[0]} cy={q.p[1]} r="4.2" fill={tcol(hot(q.seg, q.p[0]))} opacity={0.95 * Math.min(1, op.loopP * 1.5)} />; })}
+    {/* cooler on the return line, with cooling water */}
+    <Block id="ptl" x={cx0} y={yT - 24} w={cx1 - cx0} h={48} d={14} f="comp">
+      {Array.from({ length: Math.floor((cx1 - cx0 - 20) / 10) }, (_, j) => <line key={j} x1={cx0 + 10 + j * 10} x2={cx0 + 10 + j * 10} y1={yT - 20} y2={yT + 20} stroke="#33505f" strokeWidth="2" opacity=".7" />)}
+      <rect x={(cx0 + cx1) / 2 - 58} y={yT - 9} width="116" height="18" rx="2" fill="#e8eef2" stroke="#455f72" strokeWidth=".6" />
+      <text x={(cx0 + cx1) / 2} y={yT + 4} textAnchor="middle" className="ts-plate">{T("cooler")} {fmt(op.w * 0.92, 0)} kW</text></Block>
+    <path d={`M${cx0 + 24} ${yT - 32} V${yT - 44} H${cx0 - 16}`} className="ts-flow" stroke="#3d8fd6" strokeDashoffset={-tm.current * 20} />
+    <path d={`M${cx1 - 10} ${yT - 32} V${yT - 44} H${cx1 + 30}`} className="ts-flow" stroke="#d17a2a" strokeDashoffset={tm.current * 20} />
+    {/* throttle valve on the riser and anti-surge recycle around it */}
+    <path d={`M${xR} ${yA - 14} H${xR + 44} V${yT + 14} H${xR}`} className="ts-pipe" stroke={op.asv > 1 ? "#c0392b" : "#8e9aa5"} strokeWidth="7" strokeDasharray={op.asv > 1 ? "9 6" : undefined} strokeDashoffset={-tm.current * 40} />
+    {([[xR, (yA + yT) / 2, op.valve, "#0b5cad"], [xR + 44, (yA + yT) / 2, op.asv, op.asv > 1 ? "#c0392b" : "#5b6878"]] as [number, number, number, string][]).map(([vx, vy, o, c], j) => <g key={j}>
+      <polygon points={`${vx - 11},${vy - 11} ${vx + 11},${vy - 11} ${vx - 11},${vy + 11} ${vx + 11},${vy + 11}`} transform={`rotate(90 ${vx} ${vy})`} fill="#f4f6f8" stroke="#1f2a35" strokeWidth="1.3" />
+      <line x1={vx} y1={vy} x2={vx - 20} y2={vy} stroke="#1f2a35" strokeWidth="2" /><rect x={vx - 34} y={vy - 8} width="14" height="16" rx="2" fill={c} />
+      <rect x={vx - 34} y={vy + 10} width="14" height="3" fill="var(--line)" /><rect x={vx - 34} y={vy + 10} width={14 * o / 100} height="3" fill="#2e9e6b" /></g>)}
+    {/* orifice flow element, gas analyser and gas charging */}
+    {/* flow element as an in-line spool with flanges */}
+    <rect x={fe - 30} y={yA - 15} width="60" height="30" rx="4" fill={`url(#${gid}-c-steel)`} stroke="#1f2a35" strokeWidth=".9" />
+    <rect x={fe - 34} y={yA - 18} width="6" height="36" rx="1" fill="#9aa4ad" stroke="#1f2a35" strokeWidth=".7" /><rect x={fe + 28} y={yA - 18} width="6" height="36" rx="1" fill="#9aa4ad" stroke="#1f2a35" strokeWidth=".7" />
+    <rect x={fe - 2} y={yA + 15} width="4" height="6" fill="#1f2a35" />
+    <text x={fe} y={yA - 26} textAnchor="middle" className="ts-lab">FLOW ELEMENT</text><text x={fe} y={yA - 38} textAnchor="middle" className="ts-sub">orifice β {fmt(s.setup.beta, 3)}</text>
+    {/* gas charging bottle with its valve */}
+    <path d={`M${xL + 63} ${yA + 8} V${yA + 34}`} stroke="#6d757e" strokeWidth="3" />
+    <polygon points={`${xL + 66},${yA + 22} ${xL + 80},${yA + 15} ${xL + 80},${yA + 29}`} fill="#f4f6f8" stroke="#1f2a35" strokeWidth=".9" />
+    <polygon points={`${xL + 94},${yA + 22} ${xL + 80},${yA + 15} ${xL + 80},${yA + 29}`} fill="#f4f6f8" stroke="#1f2a35" strokeWidth=".9" />
+    <rect x={xL + 47} y={yA + 34} width="32" height="62" rx="14" fill={`url(#${gid}-c-cab)`} stroke="#1f2a35" strokeWidth=".9" />
+    <rect x={xL + 57} y={yA + 28} width="12" height="8" rx="2" fill="#9aa4ad" stroke="#1f2a35" strokeWidth=".6" />
+    <text x={xL + 63} y={yA + 70} textAnchor="middle" className="ts-plate">{gas}</text><text x={xL + 40} y={yA + 56} textAnchor="end" className="ts-lab">GAS CHARGING</text>
+    {/* labels and flow arrows */}
+    <text x={(cx0 + cx1) / 2} y={yT - 38} textAnchor="middle" className="ts-lab">GAS COOLER</text>
+    <text x={xR - 46} y={(yA + yT) / 2 - 4} textAnchor="end" className="ts-lab">CONTROL VALVE</text><text x={xR - 46} y={(yA + yT) / 2 + 9} textAnchor="end" className="ts-sub">with anti-surge bypass</text>
+    {op.loopP > 0.05 && !op.surge && <g>
+      <Arrow x={(cx1 + xR) / 2} y={yT} dir="l" c="#d6453a" /><Arrow x={(xL + cx0) / 2} y={yT} dir="l" c="#2f7fc9" /><Arrow x={(xL + fe) / 2} y={yA} dir="r" c="#2f7fc9" />
+      <Arrow x={(dx + xR) / 2} y={yA} dir="r" c="#d6453a" /><Arrow x={sx} y={yA + 34} dir="d" c="#2f7fc9" /><Arrow x={dx} y={yA + 40} dir="u" c="#d6453a" /><Arrow x={xR} y={yT + 14} dir="u" c="#d6453a" /></g>}
+
+  </g>;
+  const over = <g>
+    <TagCard x={xL + 120} y={yA + 18} title="Driver" w={140} to={[mx + mw / 2 - 5, A.YD - 100]} rows={[[T("N1"), `${fmt(op.n, 0)} rpm`], [T("power"), `${fmt(op.w, 0)} kW`]]} />
+    <TagCard x={fe - 236} y={yA + 18} title="Flow element" w={156} rh={15} to={[fe, yA + 16]} rows={[[T("dp"), `${fmt(op.dp, 2)} kPa`], [T("tu"), `${fmt(op.t1, 1)} °C`], [T("gas"), `${fmt(purity, 1)} %`, "#a08f5c"]]} />
+    <TagCard x={sx - 206} y={yA + 18} title="Compressor flanges" w={160} rh={15} to={[sx - 12, yA + 34]} rows={[[T("p1"), `${fmt(op.p1, 3)} bara`], [T("t1"), `${fmt(op.t1, 2)} °C`],
+      [T("p2"), `${fmt(op.p2, 3)} bara`, "#c0392b"], [T("t2"), `${fmt(op.t2, 2)} °C`, "#c0392b"]]} />
+    <TagCard x={xR - 214} y={yT + 18} title="Control valves" w={176} rh={15} to={[xR - 34, (yA + yT) / 2]} rows={[[T("valve"), `${fmt(op.valve, 0)} % open`, "#2e9e6b"], [T("asv"), `${fmt(op.asv, 0)} %`, op.asv > 1 ? "#c0392b" : "#5b6878"]]} />
+    <TagCard x={gx - 30} y={yA + 18} title="Seal gas" w={176} rh={15} to={[gx + 60, A.Y - 110]} rows={[[T("SG_DE"), `${fmt(sgv[0], 2)} Nm³/h`, "#56b4e9"], [T("SG_NDE"), `${fmt(sgv[1], 2)} Nm³/h`, "#56b4e9"], [T("SG_P"), `${fmt(op.p1 + 1.5, 2)} bara`, "#e69f00"]]} />
+    <TagCard x={A.console[0]} y={A.console[1] - 104} title="Lube oil" w={176} rh={15} to={[A.console[0] + 90, A.console[1] - 6]} rows={[[T("T_oil"), "45.0 °C", "#3d8fd6"], [T("P_oil"), `${fmt(op.n > 50 ? 1.6 : 0.2, 2)} barg`, "#3d8fd6"]]} />
+    {op.rec && <g><rect x={c0.x + 70} y={A.Y + 96} width={c0.w - 140} height="22" rx="3" fill="#0b5cad" opacity=".92" /><text x={c0.x + c0.w / 2} y={A.Y + 111} textAnchor="middle" className="ts-name">● RECORDING {lines[li].rs[ev.k].point}</text></g>}
+    {op.surge && <g><rect x={c0.x + 70} y={A.Y + 96} width={c0.w - 140} height="22" rx="3" fill="#c0392b" opacity=".95" className="blink" /><text x={c0.x + c0.w / 2} y={A.Y + 111} textAnchor="middle" className="ts-name">SURGE · ANTI-SURGE VALVE OPEN</text></g>}
+  </g>;
+  const stage = <TrainScene id={gid} t={spec} a={A} phiD={phi / Math.max(spec.ratio ?? 1, 1)} phiC={phi} flow={tm.current * 30} running={op.n > 50} hz={op.n / Math.max(spec.ratio ?? 1, 1) / 60}
+    top={loop} over={inst || still ? over : undefined} svgRef={svgRef} />;
   if (still) return stage;
 
   const all: { l: Json; c: string }[] = lines.map((l: Json, j: number) => ({ l, c: LINE[j % 5] }));
@@ -245,6 +228,7 @@ function LoopAnim({ s, d, T, still, svgRef }: { s: Json; d: Json; T: TFn; still?
         <div className="mrt-controls">
           <button className="btn primary" onClick={() => { if (t.current >= dur) t.current = 0; setPlaying(!playing); }}>{playing ? "Pause" : now > 0 && now < dur ? "Resume" : "Play test"}</button>
           <button className="btn" onClick={() => { t.current = 0; setPlaying(false); setFrame((k) => k + 1); }}>Reset</button>
+          <button className={`btn ${inst ? "on" : ""}`} onClick={() => setInst(!inst)}>{inst ? "Hide instruments" : "Show instruments"}</button>
           <div className="seg">{MULS.map((m) => <button key={m} className={mul === m ? "on" : ""} onClick={() => setMul(m)}>{m}×</button>)}</div>
           <div className="seg">{lines.map((l: Json, j: number) => <button key={j} className={li === j ? "on" : ""} onClick={() => { t.current = seq.find((e) => e.li === j && e.kind === "throttle")?.t0 ?? 0; setFrame((k) => k + 1); }}>
             {fmt(l.speed_frac * 100, 0)} %</button>)}</div>
@@ -311,6 +295,10 @@ export function PerfTestPage(c: Ctx) {
   const fileRef = useRef<HTMLInputElement>(null);
   const capRef = useRef<SVGSVGElement | null>(null);
   const { T } = useTags(c.project);
+  const db = c.project?.design_basis ?? {}, gr = Number(c.project?.train?.gear_ratio ?? 1);
+  const turbine = /turbine/.test(db.driver_type ?? "");
+  const spec: TrainSpec = useMemo(() => ({ vfd: !turbine, geared: gr > 1.0001 || db.driver_type === "fixed_speed_motor_gearbox", casings: 1, turbine,
+    ratio: gr > 1.0001 ? gr : 1, names: { driver: turbine ? "test driver" : "shop motor", casing: ["contract rotor"] } }), [turbine, gr, db.driver_type]);
   const body = (o: Json = opt, l: Json = logs) => ({ project: c.project, options: o, logs: l });
   const load = async (o: Json = opt, l: Json = logs) => {
     const id = ++seq.current;
@@ -384,7 +372,7 @@ export function PerfTestPage(c: Ctx) {
         ["Data", s?.simulated ? "simulated example" : "measured log"], ["Overall", d.status]].map(([l, x]) =>
         <div className="kpi" key={l}><div className={`v ${String(x).length > 16 ? "long" : ""}`}>{l === "Overall" ? <Pill s={x} /> : x}</div><div className="l">{l}</div></div>)}</div>}
       {d && <Summary rows={summary} />}
-      {d && s?.lines && <div className="capture" aria-hidden="true"><LoopAnim key={`cap-${secKey}-${sel?.gas}-${sel?.N_rpm}`} s={s} d={d} T={T} still svgRef={(e) => { capRef.current = e; }} /></div>}
+      {d && s?.lines && <div className="capture" aria-hidden="true"><LoopAnim key={`cap-${secKey}-${sel?.gas}-${sel?.N_rpm}`} s={s} d={d} T={T} spec={spec} still svgRef={(e) => { capRef.current = e; }} /></div>}
       <div className="seg" style={{ marginBottom: 14 }}>{TABS.map((t, i) => <button key={t} className={tab === i ? "on" : ""} onClick={() => setTab(i)}>{t}</button>)}
         {d?.sections?.length > 1 && d.sections.map((x: Json, i: number) => <button key={`s${i}`} className={si === i ? "on" : ""} onClick={() => setSi(i)}>Section {x.spec.section}</button>)}</div>
       {busy && <p className="muted">Calculating the test (screening, data reduction and uncertainty)…</p>}
@@ -449,7 +437,7 @@ export function PerfTestPage(c: Ctx) {
               upd({ type1: { ...(opt.type1 ?? {}), [k]: e.target.value === "" ? undefined : Number(e.target.value) } })} /></td></tr>)}</tbody></table></div>}
       </>}
 
-      {d && s?.lines && tab === 1 && <div className="card"><h3>Closed test loop · 2.5D, gas coloured by temperature</h3><LoopAnim key={`${secKey}-${sel?.gas}-${sel?.N_rpm}`} s={s} d={d} T={T} /></div>}
+      {d && s?.lines && tab === 1 && <div className="card"><h3>Closed test loop · 2.5D, gas coloured by temperature</h3><LoopAnim key={`${secKey}-${sel?.gas}-${sel?.N_rpm}`} s={s} d={d} T={T} spec={spec} /></div>}
 
       {d && s?.lines && tab === 2 && <div className="card"><h3>Test log · section {s.spec.section}</h3>
         {s.simulated ? <p className="small"><Pill s="review" /> Simulated example readings (predicted curve on the test gas with a small machine deviation and instrument scatter).{" "}
