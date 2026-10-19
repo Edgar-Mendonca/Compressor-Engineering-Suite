@@ -446,6 +446,7 @@ class FEARequest(BaseModel):
     casing: int = 0
     impeller: int = 0
     opts: dict[str, Any] = Field(default_factory=dict)
+    images: list[dict[str, str]] = Field(default_factory=list)      # viewer pictures for the report: {title, png data-URL}
 
 
 _fea_cache: "OrderedDict[str, dict]" = OrderedDict()
@@ -499,7 +500,7 @@ def fea3d_export(fmt: Literal["vtu", "inp", "pdf"], req: FEARequest):
     from compsuite.structural.impeller3d_report import fea_report
     others = sorted((I.summary_row(v) for v in _fea_cache.values() if v.get("_group") == r.get("_group")), key=lambda q: q["impeller"])
     with prism._LOCK:
-        pdf = fea_report(req.project, r, others)
+        pdf = fea_report(req.project, r, others, req.images)
     return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{name}_fea.pdf"'})
 
 

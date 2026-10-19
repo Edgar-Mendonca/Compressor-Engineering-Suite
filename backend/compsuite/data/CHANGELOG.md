@@ -3,6 +3,14 @@
 Release notes shown on the launcher. Newest first. Releases are published
 from version tags (vX.Y.Z) with a Windows installer attached.
 
+## 0.5.5 - 2026-10-19
+- 3D FEA viewer: element mesh lines over the results, crisp colour bands (8-16, or smooth) with a labelled colour bar, MAX / MIN markers with values, faint undeformed outline, front / back / side / sector / iso views, fit, axis triad, report-quality picture export (white, 3x) and "Add to report" pictures
+- FEA report rebuilt in the house style (cover, contents, sign-off) with banded contour pictures and MAX / MIN, mesh pictures, further fields, hot-spot table, stress along paths, bore contact and shrink fit, spin test, permanent deformation, Campbell / SAFE, mode shapes and the Goodman diagram
+- Rotor model drawing in the vendor style (stepped shaft, impellers, added masses, spring-damper bearings, close clearances, CG, stations) in the rotor, lateral and stability pages, with animated mode shapes and deflected shapes over it
+- 3D rotor view: whirl orbits at the stations and the deflected centreline, forward (green) and backward (orange) modes
+- Torsional page: mass-elastic train model (as in the report) and animated mode shapes on the model; reports add mode shapes on the train / rotor model and damped mode shapes at MCS
+- Design-study (calculation) report rebuilt in the house style: datasheet, cases, map, stages and impellers, rotor and shaft, bearings, seals and lube oil, lateral with mode shapes on the rotor, torsional, checklist, methods and sign-off
+
 ## 0.5.4 - 2026-10-18
 - Fixed the "Unhandled exception in script - WinError 87" dialog: on closing the app the watchdog restarted the engine process while the window process was exiting; the watchdog now stops first, the engine exits quietly if its parent has gone, and the release self-test starts and stops the engine process the way the app does
 - Report pictures are sharp and on a white background: the captured 2.5D drawings keep their colours (theme gradients resolved) at high resolution and are embedded in the PDF without resampling

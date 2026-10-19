@@ -148,58 +148,176 @@ def report_html(project, res: dict) -> str:
                       traces=collect_traces(res), cas=cas)
 
 
-def report_pdf(project, res: dict) -> bytes:
-    """Multi-page PDF built with matplotlib (no external PDF engine needed)."""
+UNITS = {"kw": "kW", "mm": "mm", "kg": "kg", "n": "N", "um": "um", "mpa": "MPa", "c": "C", "rpm": "rpm", "m": "m", "pct": "%", "bar": "bar", "bara": "bara",
+         "kg_s": "kg/s", "l_min": "l/min", "m2": "m2", "n_m": "N/m", "m3_h": "m3/h", "cst": "cSt", "hz": "Hz", "cpm": "cpm", "kgm2": "kg m2"}
+
+
+def _head(k: str) -> str:
+    """'oil_flow_l_min' -> 'Oil flow l/min'."""
+    parts = k.split("_")
+    for n in (2, 1):
+        u = "_".join(parts[-n:])
+        if len(parts) > n and u in UNITS:
+            return " ".join(parts[:-n]).capitalize() + " " + UNITS[u]
+    return k.replace("_", " ").capitalize()
+
+
+def _rows(items: list, keys: list | None = None, n: int = 7):
+    """Generic table of a list of result dicts: label column + the first n scalar fields."""
+    items = [i for i in items if isinstance(i, dict)]
+    if not items:
+        return [], []
+    keys = keys or [k for k, v in items[0].items() if isinstance(v, (int, float, str)) and not k.startswith("_") and k != "trace"][:n]
+    return [_head(k) for k in keys], [[_f(i.get(k), 3 if isinstance(i.get(k), float) and abs(i.get(k)) < 10 else 1) for k in keys] for i in items]
+
+
+def _xs(n: int, x0=0.07, w=0.86):
+    return [x0 + w * j / n for j in range(n)]
+
+
+def _figpng(fig) -> bytes:
     import matplotlib.pyplot as plt
+    b = io.BytesIO()
+    fig.savefig(b, format="png", dpi=200, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return b.getvalue()
+
+
+def report_pdf(project, res: dict) -> bytes:
+    """Design-study report in the house style (cover, contents, header / footer, sign-off): summary and datasheet,
+    gas and operating cases, compressor map, stage design, impellers, rotor and shaft, bearings and seals, lateral,
+    stability, torsional, auxiliaries, verification checklist, methods and traceability."""
     from matplotlib.backends.backend_pdf import PdfPages
+
     from compsuite.reporting import figures as F
+    from compsuite.reporting.rotordynamics_reports import mode_on_rotor, rotor_drawing, train_drawing
+    from compsuite.testing.drawings import Doc
+    from compsuite.testing.mrt import cover_info, doc_info
+    cas = res["casings"][0]
+    lat, sm, ck = cas["lateral"], res["summary"], res["checklist"]
+    info = doc_info(project, "Compressor design report")
     buf = io.BytesIO()
+
+    def fig(d, f, h=0.36, title=None):
+        if d.y - h < 0.07:
+            d.page("(continued)")
+        if title:
+            d.line(title, 8.5, bold=True)
+        d.image(_figpng(f), [0.07, d.y - h, 0.86, h])
+        d.y -= h + 0.015
+
+    def table(d, title, head_rows, fs=6.8):
+        head, rows = head_rows
+        if rows:
+            d.heading(title)
+            d.table(head, rows, _xs(len(head)), fs, 30)
+
     with PdfPages(buf) as pdf:
-        fig = plt.figure(figsize=(8.27, 11.69))
-        fig.text(0.08, 0.95, project.name, fontsize=16, weight="bold")
-        fig.text(0.08, 0.93, f"{project.description} - revision {project.revision} - compsuite {res['software_version']} - "
-                             f"input hash {res['input_hash']}", fontsize=7.5, color="#5f6b7a")
-        fig.text(0.08, 0.905, "Preliminary engineering results. Not a certificate of compliance. Qualified review required.",
-                 fontsize=7.5, color="#9a6700")
-        y = 0.87
+        d = Doc(pdf, f"Centrifugal compressor design study - CentriForge {res['software_version']}", info)
+        cnt = ck["counts"]
+        d.cover("Compressor design report", cover_info(project, info, [("Configuration", sm.get("configuration", "-")), ("Speed", f"{sm['speed_rpm']:.0f} rpm"),
+                                                                      ("Stages / casings", f"{sm['stages']} / {sm['casings']}"), ("Shaft power", f"{sm['shaft_power_kw']:.0f} kW")]),
+                None, lambda ax: rotor_drawing(ax, cas["rotor"], lat["z_m"]),
+                [("Checklist pass", str(cnt.get("pass", 0)), "pass"), ("Checklist fail", str(cnt.get("fail", 0)), "fail" if cnt.get("fail") else "pass"),
+                 ("Attention", str(cnt.get("attention", 0)), "attention" if cnt.get("attention") else "pass"), ("For review", str(cnt.get("review", 0)), "review"),
+                 ("Lateral (API 617)", "", "pass" if lat.get("conclusion", {}).get("pass") else "review"),
+                 ("Torsional (API 617)", "", "pass" if res["torsional"].get("conclusion", {}).get("pass", True) else "review")])
+
+        d.page("1  Summary and datasheet")
+        d.line(f"{project.description or project.name}. Revision {project.revision}; input hash {res['input_hash']}. Preliminary engineering results - not a "
+               "certificate of compliance; detailed design and safety-critical conclusions require qualified review.", 8)
+        for w in sm.get("warnings", [])[:8]:
+            d.line("! " + w, 7.5, "#a8650c")
         for title, rows in datasheet(project, res):
-            fig.text(0.08, y, title, fontsize=9.5, weight="bold")
-            y -= 0.016
-            for k, v, u in rows:
-                fig.text(0.10, y, k, fontsize=7.5)
-                fig.text(0.55, y, f"{v} {u}", fontsize=7.5)
-                y -= 0.0125
-            y -= 0.008
-        pdf.savefig(fig)
-        plt.close(fig)
-        cas = res["casings"][0]
-        makers = []
+            d.heading(title)
+            d.table(["Item", "Value", "Unit"], rows, [0.07, 0.5, 0.75], 7, 60)
+
+        d.page("2  Gas and operating cases")
+        g = res["gas"]
+        d.line(f"Gas: MW {g['mw']:.2f}; property engine {g['engine']}; hydrocarbon dew point {_f(g.get('hydrocarbon_dew_point_c'))} C; "
+               f"pH2S {_f(g.get('ph2s_suction_bar'), 3)} bar, pCO2 {_f(g.get('pco2_suction_bar'), 3)} bar.", 8)
+        d.table(["Case", "Ps bara", "Ts C", "Pd bara", "Flow kg/s", "Head kJ/kg", "eta p", "Td C", "Power kW", "Speed %", "Surge m. %"],
+                [(c["case"], _f(c["suction"]["P"] / 1e5, 2), _f(c["suction"]["T"] - 273.15), _f(c["discharge"]["P"] / 1e5, 2), _f(c["mass_flow_kg_s"], 2),
+                  _f(c["polytropic_head_j_kg"] / 1e3), _f(c["polytropic_efficiency"], 3), _f(c["discharge"]["T"] - 273.15), _f(c["shaft_power_kw"], 0),
+                  _f((op.get("speed_frac") or 0) * 100), _f((op.get("surge_margin") or 0) * 100))
+                 for c, op in zip(jsonable(res["cases"]), jsonable(res["operating_points"]))], _xs(11), 6.5, 16)
         if res["performance_map"]["lines"]:
-            makers.append(lambda: F.compressor_map(res))
-        makers.append(lambda: F.rotor_layout(cas["rotor"]))
-        if "campbell" in cas["lateral"]:
-            makers += [lambda: F.campbell(cas["lateral"]), lambda: F.unbalance(cas["lateral"]),
-                       lambda: F.mode_shapes(cas["lateral"], cas["rotor"])]
-        makers += [lambda: F.shaft_stress(cas["shaft"]), lambda: F.torsional_interference(res["torsional"])]
-        for mk in makers:
-            f = mk()
-            f.set_size_inches(8.27, 5.2)
-            pdf.savefig(f, bbox_inches="tight")
-            plt.close(f)
-        items = res["checklist"]["items"]
-        per = 46
-        for start in range(0, len(items), per):
-            fig = plt.figure(figsize=(8.27, 11.69))
-            fig.text(0.06, 0.96, "Verification checklist" + (" (cont.)" if start else ""), fontsize=11, weight="bold")
-            y = 0.93
-            colors = {"pass": "#2e7d4f", "fail": "#b3261e", "attention": "#9a6700", "review": "#5f6b7a"}
-            for it in items[start:start + per]:
-                fig.text(0.06, y, it["status"].upper(), fontsize=6.5, color=colors[it["status"]], weight="bold")
-                fig.text(0.16, y, f"{it['category']}: {it['check']}"[:95], fontsize=6.5)
-                fig.text(0.70, y, f"{it['value']}"[:40], fontsize=6.5)
-                y -= 0.0195
-            pdf.savefig(fig)
-            plt.close(fig)
+            fig(d, F.compressor_map(res), 0.42, "Performance map: speed lines, surge and choke, operating points")
+
+        d.page("3  Stage and impeller design")
+        imps = {i["index"]: i for c in res["casings"] for i in c["impellers"]["impellers"]}
+        d.table(["Stage", "phi", "psi", "eta p", "P in", "P out", "T out C", "b2 mm", "Eye mm", "Mass kg", "Thrust kN"],
+                [(s["index"] + 1, _f(s["phi"], 4), _f(s["psi"], 3), _f(s["eta"], 3), _f(s["P_in_bara"], 2), _f(s["P_out_bara"], 2), _f(s["T_out_c"]),
+                  _f(imps[s["index"]]["b2_mm"]), _f(imps[s["index"]]["D1_eye_mm"], 0), _f(imps[s["index"]]["mass_kg"]), _f(imps[s["index"]]["thrust_n"] / 1e3, 1))
+                 for s in jsonable(res["sizing"]["stages"])], _xs(11), 6.5, 14)
+        table(d, "Impeller stresses (2D axisymmetric FEA)", _rows(jsonable((cas.get("impeller_fea") or {}).get("impellers", [])), n=8))
+
+        d.page("4  Rotor, shaft and thrust")
+        rotor_drawing(d.drawing([0.05, d.y - 0.22, 0.9, 0.21]), cas["rotor"], lat["z_m"])
+        d.y -= 0.24
+        mp = cas["mass_properties"]
+        d.line(f"Rotor mass {mp['mass_kg']:.0f} kg, CG {mp['cg_m'] * 1e3:.0f} mm, Ip {mp['ip_kgm2']:.2f} kg m2; bearing span {cas['rotor']['bearing_span_m'] * 1e3:.0f} mm "
+               f"(L/D {cas['rotor']['span_to_diameter']:.2f}); residual thrust {cas['rotor']['thrust']['residual_n'] / 1e3:.1f} kN. Shaft: min fatigue SF "
+               f"{cas['shaft']['min_fatigue_safety']:.2f}, min yield SF {cas['shaft']['min_yield_safety']:.2f}, mid-span sag {cas['shaft']['midspan_sag_um']:.1f} um.", 8)
+        fig(d, F.shaft_stress(cas["shaft"]), 0.33, "Shaft stresses and fatigue safety along the rotor")
+
+        d.page("5  Bearings, seals and auxiliaries")
+        b = jsonable(cas["bearings"].get("bearings", []))
+        if isinstance(b, dict):
+            table(d, "Journal bearings", _rows([{"bearing": k, **v.get("geometry", {})} for k, v in b.items()]))
+            for k, v in b.items():
+                table(d, f"{k} - dynamic coefficients vs speed", _rows(v.get("rows", []), ["speed_rpm", "kxx", "kyy", "kxy", "cxx", "cyy"]))
+        se = jsonable(cas["seals"])
+        table(d, "Labyrinth seals", _rows(se.get("labyrinths", []), n=7))
+        es = se.get("end_seals") or {}
+        if isinstance(es, dict):
+            d.heading("End seals")
+            d.table(["Item", "Value"], [(_head(k), _f(v, 3) if isinstance(v, float) else str(v)) for k, v in es.items() if isinstance(v, (int, float, str))], [0.07, 0.5], 7)
+        d.line(f"Total Wachel cross-coupling {se.get('total_wachel_q_n_m', 0) / 1e6:.2f} MN/m; internal recirculation {_f(se.get('internal_recirculation_kg_s'), 3)} kg/s.", 7.5)
+        lu = jsonable(res.get("lube") or {})
+        if lu:
+            d.heading("Lube oil system (API 614)")
+            d.table(["Item", "Value"], [(_head(k), _f(v, 2)) for k, v in lu.items() if isinstance(v, (int, float))], [0.07, 0.5], 7)
+
+        if "campbell" in lat:
+            d.page("6  Lateral analysis (API 617 / API 684)")
+            fig(d, F.campbell(lat), 0.33, "Damped Campbell diagram")
+            fig(d, F.unbalance(lat), 0.33, "Unbalance response")
+            d.page("6  Lateral analysis - mode shapes on the rotor model")
+            bc = lat["bearing_cases"][len(lat["bearing_cases"]) // 2] if lat.get("bearing_cases") else None
+            for j, m in enumerate((bc or {}).get("undamped_modes", [])[:3]):
+                mode_on_rotor(d.drawing([0.06, d.y - 0.2, 0.88, 0.19]), cas["rotor"], lat["z_m"], m["shape"], f"Undamped mode {j + 1}: {m['freq_rpm']:.0f} rpm",
+                              ["#0b5cad", "#2e9e6b", "#d1782a"][j])
+                d.y -= 0.21
+            table(d, f"Undamped critical speeds - {(bc or {}).get('label', '')}", _rows(jsonable((bc or {}).get("undamped_criticals", [])), ["mode", "kxx_rpm", "kyy_rpm"]))
+            st = lat.get("stability", {})
+            d.heading("Stability")
+            d.line(f"First critical on rigid supports {_f(st.get('first_critical_rigid_rpm'), 0)} rpm; CSR {_f(st.get('critical_speed_ratio'), 2)}; "
+                   f"QA {_f((st.get('qa_n_m') or 0) / 1e6, 2)} MN/m. Full details in the lateral and stability analysis reports.", 8)
+
+        t = res["torsional"]
+        d.page("7  Torsional analysis (API 617 / API 684)")
+        if t.get("model"):
+            train_drawing(d.drawing([0.05, d.y - 0.2, 0.9, 0.19]), t["model"])
+            d.y -= 0.22
+        table(d, "Torsional natural frequencies", _rows(jsonable(t.get("tnf", [])), ["mode", "freq_hz", "freq_cpm"]))
+        fig(d, F.torsional_interference(t), 0.36, "Interference diagram")
+
+        d.page("8  Verification checklist")
+        d.line(f"{cnt.get('pass', 0)} pass, {cnt.get('fail', 0)} fail, {cnt.get('attention', 0)} attention, {cnt.get('review', 0)} for review.", 8, bold=True)
+        d.table(["Status", "Category", "Check", "Value", "Reference"],
+                [(i["status"], i["category"], i["check"], str(i["value"])[:24], str(i.get("reference", ""))[:28]) for i in ck["items"]],
+                [0.07, 0.15, 0.29, 0.63, 0.78], 6.3, 48)
+
+        d.page("9  Methods, assumptions and traceability")
+        for tr in jsonable(collect_traces(res)):
+            d.line(f"{tr['module']} - {tr['method']}", 8, "#0b5cad", True)
+            for a_ in (tr.get("assumptions") or [])[:6]:
+                d.line("- " + str(a_), 6.8)
+            if tr.get("references"):
+                d.line("References: " + "; ".join(map(str, tr["references"]))[:300], 6.5, "#5b6878")
+        d.signoff((project.test_doc or {}).get("signoff"), ("Prepared - design engineer", "Checked - rotating equipment engineer", "Approved - engineering manager"))
+        d.close()
     return buf.getvalue()
 
 

@@ -7,7 +7,7 @@ const COLORS: Record<string, number> = {
   shaft: 0x9aa7b4, impeller: 0x4f8fcf, piston: 0xc9a35a, collar: 0xb07c4f, coupling: 0x7d8a98, sleeve: 0x6fb3a6, bearing: 0xe08a3c,
 };
 
-type Mode = { z: number[]; shape: number[]; label?: string } | null;
+type Mode = { z: number[]; shape: number[]; label?: string; whirl?: string } | null;
 
 function interp(z: number[], s: number[], x: number) {
   if (x <= z[0]) return s[0];
@@ -90,7 +90,7 @@ export function RotorView({ scene, mode, amplitude = 0.04 }: { scene: Json; mode
     renderer.setSize(w, h);
     el.appendChild(renderer.domElement);
     const s = new THREE.Scene();
-    s.background = new THREE.Color(0x0f151b);
+    s.background = new THREE.Color(0x0b1220);
     const camera = new THREE.PerspectiveCamera(35, w / h, 0.01, 50);
     const L = scene.length;
     camera.position.set(L * 0.3, L * 0.22, L * 0.62);
@@ -105,6 +105,34 @@ export function RotorView({ scene, mode, amplitude = 0.04 }: { scene: Json; mode
     group.position.x = -L / 2;
     holder.add(group);
     s.add(holder);
+    // whirl orbits at the stations and the deflected centreline (rebuilt when the mode changes)
+    const orbitG = new THREE.Group();
+    holder.add(orbitG);
+    const NZ = 80, cl = new Float32Array(NZ * 3);
+    const clGeo = new THREE.BufferGeometry();
+    clGeo.setAttribute("position", new THREE.BufferAttribute(cl, 3));
+    const clLine = new THREE.Line(clGeo, new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false }));
+    clLine.renderOrder = 2;
+    holder.add(clLine);
+    const dots: THREE.Mesh[] = [];
+    let built: Mode = null;
+    const build = (m: Mode) => {
+      orbitG.clear(); dots.length = 0; built = m;
+      if (!m) return;
+      const col = m.whirl === "backward" ? 0xe5732e : 0x30a46c;
+      const zs = [...scene.parts.filter((p: Json) => p.type !== "cylinder").map((p: Json) => p.z_center), 0, L];
+      for (const zz of zs) {
+        const a = Math.abs(amplitude * interp(m.z, m.shape, zz));
+        const ring = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 48 }, (_, i) =>
+          new THREE.Vector3(zz - L / 2, a * Math.cos((i / 48) * 2 * Math.PI), a * Math.sin((i / 48) * 2 * Math.PI)))), new THREE.LineBasicMaterial({ color: col, depthTest: false }));
+        ring.renderOrder = 2;
+        orbitG.add(ring);
+        const d = new THREE.Mesh(new THREE.SphereGeometry(L * 0.004), new THREE.MeshBasicMaterial({ color: col, depthTest: false }));
+        d.renderOrder = 3; d.userData.z = zz;
+        orbitG.add(d); dots.push(d);
+      }
+      (clLine.material as THREE.LineBasicMaterial).color.setHex(col);
+    };
     const grid = new THREE.GridHelper(L * 1.6, 16, 0x2a3643, 0x1d2731);
     grid.position.y = -0.35;
     s.add(grid);
@@ -116,12 +144,23 @@ export function RotorView({ scene, mode, amplitude = 0.04 }: { scene: Json; mode
     const loop = () => {
       const t = (performance.now() - t0) / 1000;
       const m = modeRef.current;
+      if (m !== built) build(m);
+      const ph = 2 * Math.PI * 0.6 * t, dir = m?.whirl === "backward" ? -1 : 1;
+      clLine.visible = !!m;
+      if (m) {
+        for (let i = 0; i < NZ; i++) {
+          const zz = (L * i) / (NZ - 1), a = amplitude * interp(m.z, m.shape, zz);
+          cl[3 * i] = zz - L / 2; cl[3 * i + 1] = a * Math.cos(ph); cl[3 * i + 2] = dir * a * Math.sin(ph);
+        }
+        clGeo.attributes.position.needsUpdate = true;
+        for (const d of dots) { const a = amplitude * interp(m.z, m.shape, d.userData.z); d.position.set(d.userData.z - L / 2, a * Math.cos(ph), dir * a * Math.sin(ph)); }
+      }
       for (const pc of pieces) {
         if (m) {
           const a = amplitude * interp(m.z, m.shape, pc.z);
-          // Forward whirl orbit in the plane normal to the rotor axis.
-          pc.obj.position.x = a * Math.cos(2 * Math.PI * 0.6 * t);
-          pc.obj.position.z = a * Math.sin(2 * Math.PI * 0.6 * t);
+          // whirl orbit in the plane normal to the rotor axis (group is rotated: local x = world -y, local z = world z)
+          pc.obj.position.x = -a * Math.cos(ph);
+          pc.obj.position.z = dir * a * Math.sin(ph);
         } else {
           pc.obj.position.x = 0;
           pc.obj.position.z = 0;

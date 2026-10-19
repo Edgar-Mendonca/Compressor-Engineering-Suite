@@ -93,6 +93,23 @@ def rotor_drawing(ax, rotor: dict, z_nodes: list, stations: list | None = None, 
             "bearings (blue), close-clearance stations (red), node numbers below", fontsize=5.5, color="#5b6878")
 
 
+def mode_on_rotor(ax, rotor: dict, z_nodes: list, shape, label: str, color="#0b5cad"):
+    """Vendor-style mode shape: the rotor model with the normalised shape (and its opposite half-cycle) over it, nodal points marked."""
+    rotor_drawing(ax, rotor, z_nodes, every=4)
+    ax.texts[-1].remove()
+    rmax = max(s["od_m"] for s in rotor["sections"]) / 2 * 1e3
+    sh = np.asarray(shape, float)
+    sh = sh / (np.abs(sh).max() or 1) * rmax * 2.6
+    zz = _zx(z_nodes, len(sh))
+    ax.plot(zz, sh, color=color, lw=1.6, zorder=6)
+    ax.plot(zz, -sh, color=color, lw=0.8, ls="--", alpha=0.45, zorder=6)
+    for i in range(len(sh) - 1):
+        if sh[i] * sh[i + 1] < 0:
+            zn = zz[i] + (zz[i + 1] - zz[i]) * abs(sh[i]) / (abs(sh[i]) + abs(sh[i + 1]))
+            ax.plot(zn, 0, "o", ms=4, mfc="white", mec=color, zorder=7)
+    ax.text(zz[0], rmax * 5.2, label, fontsize=7, color=color, weight="bold")
+
+
 def _data_table(d, project, res, cas, L):
     sz, db = res["sizing"], project.design_basis
     mp, rot = L["mass_properties"], cas["rotor"]
@@ -217,6 +234,22 @@ def lateral_report(project, res: dict, casing: int = 0, urt: dict | None = None)
                 ax.axvline(zb * 1e3, color="#9aa3ab", lw=0.6, ls=":")
             style(ax, "Axial position (mm)", "Normalised", f"{c['label']}")
             ax.legend(fontsize=6, frameon=False, ncol=3)
+
+        cm_ = cases[len(cases) // 2]
+        d.page(f"4  Mode shapes on the rotor model - {cm_['label']}")
+        for j, m in enumerate(cm_["undamped_modes"][:4]):
+            mode_on_rotor(d.fig.add_axes([0.06, 0.71 - j * 0.205, 0.88, 0.19]), cas["rotor"], L["z_m"], m["shape"], f"Undamped mode {j + 1}: {m['freq_rpm']:.0f} rpm", PAL[j])
+        d.y = 0.07
+        d.line("Open circles are nodal points; the dashed line is the opposite half-cycle. Radius exaggerated for legibility.", 7, "#5b6878")
+        dm = [m for m in L.get("modes_at_mcs", []) if m.get("shape")][:4]
+        if dm:
+            d.page("4  Damped mode shapes at MCS")
+            for j, m in enumerate(dm):
+                bw = m["whirl"] == "backward"
+                mode_on_rotor(d.fig.add_axes([0.06, 0.71 - j * 0.205, 0.88, 0.19]), cas["rotor"], L["z_m"], m["shape"],
+                              f"{m['whirl'].capitalize()} whirl {m['freq_cpm']:.0f} cpm, log dec {m['logdec']:.3f}", "#d1782a" if bw else "#1f7a4d")
+            d.y = 0.07
+            d.line("Green = forward whirl, orange = backward whirl (nominal bearings at MCS).", 7, "#5b6878")
 
         d.page("5  Damped Campbell diagram")
         camp = L["campbell"]
@@ -407,6 +440,14 @@ def stability_report(project, res: dict, casing: int = 0) -> bytes:
             d.table(["Seal", "Radial clr mm", "K N/m", "k N/m", "C N s/m", "c N s/m", "Swirl in"],
                     [(s["label"], _f(s["radial_clearance_mm"], 3), f"{s['K']:.3e}", f"{s['k']:.3e}", _f(s["C"], 1), _f(s["c"], 1), _f(s["pre_swirl_ratio"], 2)) for s in rows],
                     [0.07, 0.24, 0.36, 0.5, 0.64, 0.75, 0.86], 6.6)
+        fm = [m for m in L.get("modes_at_mcs", []) if m.get("shape") and m["whirl"] != "backward"][:2]
+        if fm:
+            d.page("5  Damped forward modes at MCS")
+            for j, m in enumerate(fm):
+                mode_on_rotor(d.fig.add_axes([0.06, 0.66 - j * 0.3, 0.88, 0.26]), cas["rotor"], L["z_m"], m["shape"],
+                              f"Forward whirl {m['freq_cpm']:.0f} cpm, log dec {m['logdec']:.3f} (nominal bearings, no aero cross-coupling)", "#1f7a4d")
+            d.y = 0.3
+            d.line("The first forward mode governs stability: its log decrement must stay above the API 617 limit with the anticipated cross-coupling.", 7.5, "#5b6878")
         d.page("6  Conclusion")
         for it in L["conclusion"]["items"]:
             if "stability" in it["item"].lower():
@@ -473,6 +514,19 @@ def torsional_report(project, res: dict) -> bytes:
             ax.plot(range(1, len(sh) + 1), sh / (np.abs(sh).max() or 1), "o-", ms=2.5, color=PAL[j], lw=1, label=f"mode {t['mode']} {t['freq_hz']:.1f} Hz")
         style(ax, "Station", "Normalised twist angle", "Mode shapes (referred to the compressor speed)")
         ax.legend(fontsize=6, frameon=False, ncol=3)
+        d.page("3  Mode shapes on the train model")
+        for j, t in enumerate(T["tnf"][:4]):
+            ax = d.fig.add_axes([0.05, 0.7 - j * 0.205, 0.9, 0.19])
+            x = train_drawing(ax, m)
+            sh = np.asarray(t["shape"], float)[:len(x)]
+            sh = sh / (np.abs(sh).max() or 1) * 0.45
+            ax.axhline(2.05, color="#9aa3ab", lw=0.5, ls="--")
+            ax.plot(x[:len(sh)], 2.05 + sh, "o-", ms=2.2, color="#0b5cad", lw=1.3)
+            ax.plot(x[:len(sh)], 2.05 - sh, color="#0b5cad", lw=0.6, ls="--", alpha=0.4)
+            ax.set_ylim(-1.7, 2.7)
+            ax.text(x.min() - 0.4, 2.6, f"Mode {t['mode']}: {t['freq_hz']:.1f} Hz ({t['freq_cpm']:.0f} cpm) - {', '.join(t['main'])[:60]}", fontsize=6.5, color="#0b5cad", weight="bold")
+        d.y = 0.07
+        d.line("Blue line = normalised twist angle at each station (dashed: opposite half-cycle).", 7, "#5b6878")
         cp = T["campbell"]
         d.page("4  Campbell diagrams (speed ratio and absolute)")
         rated = res["sizing"]["speed_rpm"]
@@ -601,3 +655,4 @@ def train_drawing(ax, model: dict):
     ax.set_xlim(x.min() - 0.6, x.max() + 0.6)
     ax.set_ylim(-1.7, 1.6)
     ax.axis("off")
+    return x

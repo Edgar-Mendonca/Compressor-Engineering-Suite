@@ -16,7 +16,10 @@ export const FIELDS: [string, string][] = [["von_mises_mpa", "von Mises (MPa)"],
   ["temperature_c", "Temperature (°C)"], ["plastic_strain_ue", "Plastic strain (µε)"], ["residual_ur_um", "Permanent radial growth (µm)"]];
 const TABS = ["3D results", "Paths", "Modes & SAFE", "Spin test", "Shrink fit", "Fatigue", "Convergence", "Export"];
 
-export type View = { field: string; caseName: string; scale: number; full: boolean; cut: number; wire: boolean; mode: number | null; spin: boolean; cam?: "iso" | "sector" | "front" | "back" };
+export type View = { field: string; caseName: string; scale: number; full: boolean; cut: number; wire: boolean; mode: number | null; spin: boolean; cam?: "iso" | "sector" | "front" | "back" | "side";
+  bands?: number; ghost?: boolean; plain?: boolean };
+const rgb = (t: number) => `rgb(${ramp(t).map((c) => Math.round(c * 255)).join(",")})`;
+const fv = (x: number) => (Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 1 ? x.toFixed(1) : x.toPrecision(2));
 
 export function Viewer({ r, v, setProbe, anim, h: height }: { r: Json; v: View; setProbe: (p: Json) => void; anim: Json; h?: number }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -44,9 +47,14 @@ export function Viewer({ r, v, setProbe, anim, h: height }: { r: Json; v: View; 
     const cam = new THREE.PerspectiveCamera(35, w / h, 0.001, 20);
     // camera presets: impeller axis = three y (eye side up); sector 0 lies on +x
     const presets: Record<string, [number[], number[]]> = { iso: [[R * 2.2, R * 1.7, R * 2.4], [0, R * 0.2, 0]], front: [[0, R * 3.6, 0.001], [0, 0, 0]],
-      back: [[0, -R * 3.6, 0.001], [0, 0, 0]], sector: [[R * 1.9, R * 1.1, R * 0.9], [R * 0.75, R * 0.15, 0]] };
+      back: [[0, -R * 3.6, 0.001], [0, 0, 0]], side: [[R * 3.6, R * 0.2, 0.001], [0, R * 0.2, 0]], sector: [[R * 1.9, R * 1.1, R * 0.9], [R * 0.75, R * 0.15, 0]] };
     const [cp, ct] = presets[v.cam ?? "iso"];
     cam.position.set(cp[0], cp[1], cp[2]);
+    // contour colours from a 1-D texture: crisp bands (nearest) or smooth (linear)
+    const nb = v.bands ?? 10, tw = nb > 0 ? nb : 256;
+    const tex = new THREE.DataTexture(new Uint8Array(tw * 4).map((_, j) => (j % 4 === 3 ? 255 : Math.round(ramp(Math.floor(j / 4) / (tw - 1))[j % 4] * 255))), tw, 1);
+    tex.magFilter = tex.minFilter = nb > 0 ? THREE.NearestFilter : THREE.LinearFilter;
+    tex.needsUpdate = true;
     scene.add(new THREE.HemisphereLight(0xffffff, 0x223344, 1.3));
     const sun = new THREE.DirectionalLight(0xffffff, 1.2);
     sun.position.set(1, 2, 1.5);
@@ -60,7 +68,7 @@ export function Viewer({ r, v, setProbe, anim, h: height }: { r: Json; v: View; 
     const tri: number[] = [];
     F.forEach((f) => tri.push(f[0], f[1], f[2], f[0], f[2], f[3]));
     const nN = N.length;
-    const base = new Float32Array(nN * Z * 3), disp = new Float32Array(nN * Z * 3), col = new Float32Array(nN * Z * 3);
+    const base = new Float32Array(nN * Z * 3), disp = new Float32Array(nN * Z * 3), col = new Float32Array(nN * Z * 3).fill(1), uv = new Float32Array(nN * Z * 2).fill(0.5);
     const idx: number[] = [];
     for (let s = 0; s < Z; s++) {
       const c = Math.cos(s * a), sn = Math.sin(s * a);
@@ -69,8 +77,8 @@ export function Viewer({ r, v, setProbe, anim, h: height }: { r: Json; v: View; 
         const k = 3 * (s * nN + i);
         base[k] = (c * x - sn * y) / 1000; base[k + 1] = z / 1000; base[k + 2] = -(sn * x + c * y) / 1000;
         disp[k] = (c * ux - sn * uy) / 1e6; disp[k + 1] = uz / 1e6; disp[k + 2] = -(sn * ux + c * uy) / 1e6;
-        const cc = ramp((vals[i] - lo) / (hi - lo || 1));
-        col[k] = cc[0]; col[k + 1] = cc[1]; col[k + 2] = cc[2];
+        const t = Math.min(Math.max((vals[i] - lo) / (hi - lo || 1), 0), 1);
+        uv[2 * (s * nN + i)] = nb > 0 ? Math.min(t, 0.9999) : (0.5 + t * (tw - 1)) / tw;
       }
       tri.forEach((q) => idx.push(q + s * nN));
     }
@@ -78,14 +86,32 @@ export function Viewer({ r, v, setProbe, anim, h: height }: { r: Json; v: View; 
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     g.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    g.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
     g.setIndex(idx);
     const clip = [new THREE.Plane(new THREE.Vector3(0, 0, -1), 1)];
-    const mat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.5, metalness: 0.1, wireframe: v.wire,
-      clippingPlanes: clip, clipShadows: true });
+    const mat = new THREE.MeshStandardMaterial({ vertexColors: !v.plain, map: v.plain ? null : tex, color: v.plain ? 0xb8c2cc : 0xffffff, side: THREE.DoubleSide,
+      roughness: 0.55, metalness: 0.05, clippingPlanes: clip, clipShadows: true, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
     const obj = new THREE.Mesh(g, mat);
     holder.add(obj);
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 30), new THREE.LineBasicMaterial({ color: 0x0b1220, transparent: true, opacity: 0.25, clippingPlanes: clip }));
-    if (!v.wire) holder.add(edges);
+    const lines = (geo: THREE.BufferGeometry, color: number, opacity: number) =>
+      new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity, clippingPlanes: clip }));
+    if (v.wire) {
+      // element mesh: every quad edge once, sharing the deformed positions
+      const seen = new Set<number>(), e: number[] = [], all: number[] = [];
+      F.forEach((f) => f.forEach((p, j) => { const q = f[(j + 1) % f.length], key = Math.min(p, q) * nN + Math.max(p, q);
+        if (p !== q && !seen.has(key)) { seen.add(key); e.push(p, q); } }));
+      for (let s = 0; s < Z; s++) e.forEach((q) => all.push(q + s * nN));
+      const eg = new THREE.BufferGeometry();
+      eg.setAttribute("position", g.getAttribute("position"));
+      eg.setIndex(all);
+      holder.add(lines(eg, 0x10161f, 0.5));
+    } else holder.add(lines(new THREE.EdgesGeometry(g, 30), 0x0b1220, 0.25));
+    // undeformed outline under the deformed shape
+    const g0 = new THREE.BufferGeometry();
+    g0.setAttribute("position", new THREE.BufferAttribute(base, 3));
+    g0.setIndex(idx);
+    const ghost = lines(new THREE.EdgesGeometry(g0, 30), 0x8aa0b8, 0.45);
+    holder.add(ghost);
     // extremes markers (sector 0)
     const imax = vals.indexOf(hi), imin = vals.indexOf(lo);
     const mk = (i: number, c: number) => {
@@ -131,6 +157,43 @@ export function Viewer({ r, v, setProbe, anim, h: height }: { r: Json; v: View; 
       setProbe({ node: ni, r_mm: Math.hypot(x, y), z_mm: z, values: Object.fromEntries(FIELDS.filter(([k]) => caseD[k]).map(([k, l]) => [l, caseD[k][ni]])) });
     };
     renderer.domElement.addEventListener("click", onClick);
+    // overlay: colour bar, title, MAX / MIN labels and axis triad (also drawn into the exported picture)
+    const dpr = renderer.getPixelRatio(), ov = document.createElement("canvas");
+    ov.width = w * dpr; ov.height = h * dpr;
+    ov.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none";
+    el.appendChild(ov);
+    const oc = ov.getContext("2d")!, label = FIELDS.find((f) => f[0] === v.field)?.[1] ?? v.field;
+    const draw = (c: CanvasRenderingContext2D, W: number, H: number, s: number, light: boolean, marks: boolean) => {
+      c.clearRect(0, 0, W, H);
+      const fg = light ? "#111" : "#e6edf3", vv: View = live.current.v, an = live.current.anim;
+      c.font = `600 ${12 * s}px Segoe UI, Arial`; c.fillStyle = fg;
+      c.fillText(v.plain ? "Finite-element mesh" : an ? "Spin test" : label, 12 * s, 20 * s);
+      c.font = `${11 * s}px Segoe UI, Arial`;
+      c.fillText(v.plain ? `${nN * Z} nodes shown` : `${v.caseName} · deformation ×${vv.scale}`, 12 * s, 35 * s);
+      if (!v.plain && !an) {
+        const n = nb > 0 ? nb : 32, x = 12 * s, y0 = 46 * s, bw = 14 * s, bh = Math.min(H - 70 * s, 230 * s);
+        for (let j = 0; j < n; j++) { c.fillStyle = rgb(nb > 0 ? j / (n - 1) : (j + 0.5) / n); c.fillRect(x, y0 + bh * (1 - (j + 1) / n), bw, bh / n + 0.5); }
+        c.strokeStyle = fg; c.lineWidth = 0.6 * s; c.strokeRect(x, y0, bw, bh); c.fillStyle = fg;
+        const nt = nb > 0 ? nb : 6;
+        for (let j = 0; j <= nt; j++) c.fillText(fv(lo + ((hi - lo) * j) / nt), x + bw + 5 * s, y0 + bh * (1 - j / nt) + 4 * s);
+      }
+      if (marks) ([[mMax, `MAX ${fv(hi)}`, "#ff2d55"], [mMin, `MIN ${fv(lo)}`, "#0aa5d8"]] as const).forEach(([m, t, cl]) => {
+        const p = m.getWorldPosition(new THREE.Vector3());
+        if (clip[0].distanceToPoint(p) < 0) return;
+        p.project(cam);
+        const sx = ((p.x + 1) / 2) * W, sy = ((1 - p.y) / 2) * H, bx = sx + 26 * s, by = sy - 24 * s, tw2 = c.measureText(t).width + 10 * s;
+        c.strokeStyle = cl; c.lineWidth = 1.2 * s; c.beginPath(); c.moveTo(sx, sy); c.lineTo(bx, by); c.stroke();
+        c.fillStyle = light ? "#fff" : "#0b1220"; c.fillRect(bx, by - 9 * s, tw2, 16 * s); c.strokeRect(bx, by - 9 * s, tw2, 16 * s);
+        c.fillStyle = cl; c.fillText(t, bx + 5 * s, by + 3 * s);
+      });
+      // triad: impeller axes X, Y, Z (axial) seen from the camera
+      const q = cam.quaternion.clone().invert(), ox = W - 40 * s, oy = H - 40 * s;
+      ([[[1, 0, 0], "X", "#e5484d"], [[0, 0, -1], "Y", "#30a46c"], [[0, 1, 0], "Z", "#3e7bfa"]] as const).forEach(([d, t, cl]) => {
+        const p = new THREE.Vector3(d[0], d[1], d[2]).applyQuaternion(q);
+        c.strokeStyle = c.fillStyle = cl; c.lineWidth = 2 * s; c.beginPath(); c.moveTo(ox, oy); c.lineTo(ox + p.x * 24 * s, oy - p.y * 24 * s); c.stroke();
+        c.fillText(t, ox + p.x * 31 * s - 3 * s, oy - p.y * 31 * s + 4 * s);
+      });
+    };
     let raf = 0, t0 = performance.now(), lastSig = "";
     const loop = () => {
       const now = performance.now(), t = (now - t0) / 1000;
@@ -142,7 +205,7 @@ export function Viewer({ r, v, setProbe, anim, h: height }: { r: Json; v: View; 
         sc = vv.scale * Math.min(s, 1.15) ** 2 / 1.0;
         speedRot = 0.002 + s * 0.05;
         const cs = an.colors as Float32Array | undefined;
-        if (cs) (g.getAttribute("color") as THREE.BufferAttribute).copyArray(cs).needsUpdate = true;
+        if (cs) { (g.getAttribute("color") as THREE.BufferAttribute).copyArray(cs).needsUpdate = true; if (mat.map) { mat.map = null; mat.needsUpdate = true; } }
         if (an.residual) sc = vv.scale * 0;
         extra = an.residual ? 1 : 0;
       }
@@ -156,30 +219,35 @@ export function Viewer({ r, v, setProbe, anim, h: height }: { r: Json; v: View; 
       }
       clip[0].constant = vv.cut >= 100 ? 10 : (vv.cut / 100) * R * 1.2;
       mMax.visible = mMin.visible = !shape && !an;
+      ghost.visible = vv.ghost !== false && !v.plain && sc > 0 && !shape;
+      if (!an && !mat.map && !v.plain) { (g.getAttribute("color") as THREE.BufferAttribute).copyArray(col).needsUpdate = true; mat.map = tex; mat.needsUpdate = true; }
       holder.rotation.y += speedRot;
       ctl.update();
       renderer.render(scene, cam);
+      draw(oc, ov.width, ov.height, dpr, false, !!mMax.visible);
       raf = requestAnimationFrame(loop);
     };
     loop();
-    live.current.snap = () => renderer.domElement.toDataURL("image/png");
+    // report-quality picture: white background, 3x resolution, legend and labels burnt in
+    live.current.snap = (k = 3) => {
+      const bg = scene.background; scene.background = new THREE.Color(0xffffff); grid.visible = false;
+      renderer.setPixelRatio(k); ctl.update(); renderer.render(scene, cam);
+      const out = document.createElement("canvas"); out.width = w * k; out.height = h * k;
+      const c = out.getContext("2d")!; c.fillStyle = "#fff"; c.fillRect(0, 0, out.width, out.height);
+      c.drawImage(renderer.domElement, 0, 0, out.width, out.height); draw(c, out.width, out.height, k, true, mMax.visible);
+      scene.background = bg; grid.visible = true; renderer.setPixelRatio(dpr);
+      return out.toDataURL("image/png");
+    };
+    live.current.fit = () => { cam.position.set(cp[0], cp[1], cp[2]); ctl.target.set(ct[0], ct[1], ct[2]); };
     return () => {
       cancelAnimationFrame(raf);
       renderer.domElement.removeEventListener("click", onClick);
-      ctl.dispose(); renderer.dispose(); renderer.forceContextLoss(); g.dispose();
-      el.removeChild(renderer.domElement);
+      ctl.dispose(); renderer.dispose(); renderer.forceContextLoss(); g.dispose(); g0.dispose(); tex.dispose();
+      el.removeChild(renderer.domElement); el.removeChild(ov);
     };
-  }, [r, v.field, v.caseName, v.full, v.wire, v.mode, v.cam]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { (window as Json).__feaSnap = () => live.current.snap?.(); }, []);
+  }, [r, v.field, v.caseName, v.full, v.wire, v.mode, v.cam, v.bands, v.plain]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { Object.assign(window as Json, { __feaSnap: (k?: number) => live.current.snap?.(k), __feaFit: () => live.current.fit?.() }); }, []);
   return <div ref={ref} className={height ? "viewer" : "viewer tall"} style={height ? { height } : undefined} />;
-}
-
-export function Legend({ vals, label }: { vals: number[]; label: string }) {
-  const lo = Math.min(...vals), hi = Math.max(...vals);
-  return (
-    <div className="legend"><span>{fmt(lo, 1)}</span>
-      <div className="bar" style={{ background: `linear-gradient(90deg, ${[0, .2, .4, .6, .8, 1].map((t) => `rgb(${ramp(t).map((c) => Math.round(c * 255)).join(",")})`).join(",")})` }} />
-      <span>{fmt(hi, 1)}</span><span className="muted">{label}</span></div>);
 }
 
 export function Fea3D({ project, results, casing }: { project: Json; results: Json; casing: number }) {
@@ -244,6 +312,7 @@ export function FeaExplorer({ r, body, name }: { r: Json; body: Json; name: stri
   const [v, setV] = useState<View>({ field: "von_mises_mpa", caseName: "MCS combined", scale: 200, full: true, cut: 100, wire: false, mode: null, spin: false });
   const [probe, setProbe] = useState<Json>(null);
   const [anim, setAnim] = useState<Json>(null);
+  const [shots, setShots] = useState<Json[]>([]);
   // spin-test animation: 0 -> 115 % -> hold -> 0, then permanent growth
   const spin = useMemo(() => {
     if (!r) return null;
@@ -288,7 +357,6 @@ export function FeaExplorer({ r, body, name }: { r: Json; body: Json; name: stri
   const nmcs = r.safe?.speed_range_rpm?.[1] ?? 1;
   const sp = [0, 0.25, 0.5, 0.75, 1, 1.15].map((x) => x * nmcs);
   const casesList = Object.keys(r.cases);
-  const vals: number[] = r.cases[v.caseName]?.[v.field] ?? r.cases[v.caseName].von_mises_mpa;
   return (
     <>
         <div className="seg" style={{ marginBottom: 10 }}>{TABS.map((t, i) => <button key={t} className={tab === i ? "on" : ""} onClick={() => { setTab(i); setAnim(null); if (i !== 2) setV({ ...v, mode: null }); }}>{t}</button>)}</div>
@@ -299,8 +367,13 @@ export function FeaExplorer({ r, body, name }: { r: Json; body: Json; name: stri
           <select className="inp" value={v.caseName} onChange={(e) => setV({ ...v, caseName: e.target.value })}>{casesList.map((c) => <option key={c}>{c}</option>)}</select>
           <label className="muted">Deformation ×{v.scale}<input type="range" min={0} max={1000} step={20} value={v.scale} onChange={(e) => setV({ ...v, scale: Number(e.target.value) })} /></label>
           <label className="muted">Cut plane<input type="range" min={-100} max={100} value={v.cut} onChange={(e) => setV({ ...v, cut: Number(e.target.value) })} /></label>
-          {([["full", "Full 360°"], ["wire", "Mesh"], ["spin", "Rotate"]] as const).map(([k, l]) => <button key={k} className={`chip ${v[k] ? "on" : ""}`} onClick={() => setV({ ...v, [k]: !v[k] })}>{l}</button>)}
-          <button className="chip" onClick={async () => { const d = (window as Json).__feaSnap?.(); if (d) saveBlob(await (await fetch(d)).blob(), `${name}_${v.field}.png`); }}>Snapshot PNG</button>
+          {([["full", "Full 360°"], ["wire", "Mesh lines"], ["ghost", "Undeformed"], ["spin", "Rotate"]] as const).map(([k, l]) =>
+            <button key={k} className={`chip ${(k === "ghost" ? v.ghost !== false : v[k]) ? "on" : ""}`} onClick={() => setV({ ...v, [k]: k === "ghost" ? v.ghost === false : !v[k] })}>{l}</button>)}
+          <select className="inp" value={v.bands ?? 10} onChange={(e) => setV({ ...v, bands: Number(e.target.value) })}>{[0, 8, 10, 12, 16].map((n) => <option key={n} value={n}>{n ? `${n} bands` : "Smooth"}</option>)}</select>
+          {(["iso", "front", "back", "side", "sector"] as const).map((k) => <button key={k} className={`chip ${(v.cam ?? "iso") === k ? "on" : ""}`} onClick={() => setV({ ...v, cam: k })}>{k[0].toUpperCase() + k.slice(1)}</button>)}
+          <button className="chip" onClick={() => (window as Json).__feaFit?.()}>Fit</button>
+          <button className="chip" onClick={async () => { const d = (window as Json).__feaSnap?.(); if (d) saveBlob(await (await fetch(d)).blob(), `${name}_${v.field}.png`); }}>Picture PNG</button>
+          <button className="chip" onClick={() => { const d = (window as Json).__feaSnap?.(2); if (d) setShots([...shots, { title: `${FIELDS.find((f) => f[0] === v.field)?.[1]} · ${v.caseName}`, png: d }]); }}>Add to report ({shots.length})</button>
         </div>}
         {tab === 2 && <div className="toolbar"><span className="muted">Animate mode:</span>
           {r.mode_shapes.map((m: Json, i: number) => <button key={i} className={`chip ${v.mode === i ? "on" : ""}`} onClick={() => setV({ ...v, mode: v.mode === i ? null : i })}>
@@ -319,7 +392,6 @@ export function FeaExplorer({ r, body, name }: { r: Json; body: Json; name: stri
               : <p className="muted small">Values at the nearest node for the selected load case. Red sphere = maximum, cyan = minimum.</p>}
           </div>
         </div>
-        {tab === 0 && <Legend vals={vals} label={`${FIELDS.find((f) => f[0] === v.field)?.[1]} · ${v.caseName}`} />}
       </>}
 
       {tab === 1 && <div className="grid">{Object.entries(r.paths).map(([pn, p]: [string, Json]) => (
@@ -380,7 +452,7 @@ export function FeaExplorer({ r, body, name }: { r: Json; body: Json; name: stri
         layout={{ title: "Mesh convergence (centrifugal MCS)", xaxis: { title: "Degrees of freedom", type: "log" }, yaxis: { title: "Average hoop (MPa)" }, yaxis2: { title: "Tip growth (µm)" } }} />}
 
       {tab === 7 && <div className="row">
-        <button className="btn primary" onClick={() => saveFrom("/api/fea3d/export/pdf", body, `${name}_fea.pdf`)}>FEA report (PDF)</button>
+        <button className="btn primary" onClick={() => saveFrom("/api/fea3d/export/pdf", { ...body, images: shots }, `${name}_fea.pdf`)}>FEA report (PDF)</button>
         <button className="btn" onClick={() => saveFrom("/api/fea3d/export/vtu", body, `${name}.vtu`)}>ParaView (.vtu, full 360°)</button>
         <button className="btn" onClick={() => saveFrom("/api/fea3d/export/inp", body, `${name}_ccx.inp`)}>CalculiX deck (.inp)</button>
         <button className="btn" onClick={() => saveBlob(new Blob([JSON.stringify({ summary: r.summary, checks: r.checks, modes: r.modes, safe: r.safe.hits }, null, 1)], { type: "application/json" }), `${name}_results.json`)}>Results (JSON)</button>

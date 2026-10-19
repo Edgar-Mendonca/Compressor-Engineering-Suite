@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { fmt, type Json } from "../api";
 import { Plot, SERIES } from "../components/Plot";
-import { FeaExplorer, Legend, Viewer, type View } from "../components/Fea3D";
+import { FeaExplorer, Viewer, type View } from "../components/Fea3D";
 import { safeName, saveBlob, saveFrom } from "../files";
 import { ImpellerFEA, type Ctx } from "./Pages";
 
@@ -169,7 +169,7 @@ export function ImpellerFEAPage(c: Ctx) {
             ["DOF (sector)", String(r.model.dof)], ["Sector angle", `${fmt(r.model.sector_deg, 2)}°`],
             ["Thickness factors", Array.isArray(r.model.thickness_factor) ? r.model.thickness_factor.map((x: number) => fmt(x, 2)).join(" / ") : fmt(r.model.thickness_factor, 2)]].map(([l, x]) => <Kpi key={l} l={l} v={x} />)}</div>
           <div className="grid" style={{ marginTop: 10 }}>
-            <Viewer r={r} v={{ ...vbase, caseName: "Standstill (fit only)", wire: true, cam: "sector", scale: 0 }} setProbe={() => undefined} anim={null} h={340} />
+            <Viewer r={r} v={{ ...vbase, caseName: "Standstill (fit only)", wire: true, plain: true, cam: "sector", scale: 0 }} setProbe={() => undefined} anim={null} h={340} />
             <div><ModelSketch r={r} />
               <div className="grid" style={{ gap: 8 }}><div><strong className="small">Restraints</strong><ul className="small">{r.model.restraints.map((x: string) => <li key={x}>{x}</li>)}</ul></div>
                 <div><strong className="small">Loads</strong><ul className="small">{r.model.loads.map((x: string) => <li key={x}>{x}</li>)}</ul></div></div></div>
@@ -207,7 +207,6 @@ export function ImpellerFEAPage(c: Ctx) {
             {VIEWS.map(([cam, l]) => <div key={cam}><div className="mono caps label">{l}</div>
               <Viewer r={r} v={{ ...vbase, cam }} setProbe={() => undefined} anim={null} h={300} /></div>)}
           </div>
-          <Legend vals={r.cases[caseName][field]} label={`${field === "hoop_mpa" ? "Hoop" : "von Mises"} (MPa) · ${caseName}`} />
           <p className="small" style={{ marginTop: 6 }}><strong>What this means:</strong> {MEANING[field]}</p>
         </Step>
 

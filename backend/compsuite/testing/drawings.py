@@ -294,7 +294,7 @@ class Doc:
     def signoff(self, names: dict | None = None, roles=("Prepared - vendor test engineer", "Checked - vendor QA / QC", "Witnessed - purchaser inspector",
                                                        "Witnessed - third-party inspector", "Approved - purchaser")):
         self.page("Sign-off")
-        self.line("The undersigned confirm that the test was carried out as described in this report and that the results are recorded correctly.", 8)
+        self.line("The undersigned confirm that the work was carried out as described in this report and that the results are recorded correctly.", 8)
         self.y -= 0.02
         for r in roles:
             nm = (names or {}).get(r.split(" - ")[0].lower(), "")
@@ -326,6 +326,6 @@ class Doc:
             n = len(self.figs)
         for i, f in enumerate(self.figs):
             f.add_artist(Rectangle((0.07, 0.035), 0.86, 0.0008, transform=f.transFigure, color="#9aa3ab"))
-            f.text(0.07, 0.022, f"{self.doc.get('client') or ''}  {self.doc.get('equipment') or ''}".strip() or "CentriForge test report", fontsize=6.5, color="#5b6878")
+            f.text(0.07, 0.022, f"{self.doc.get('client') or ''}  {self.doc.get('equipment') or ''}".strip() or "CentriForge report", fontsize=6.5, color="#5b6878")
             f.text(0.93, 0.022, f"Page {i + 1} of {n}", fontsize=6.5, color="#5b6878", ha="right")
             self.pdf.savefig(f)

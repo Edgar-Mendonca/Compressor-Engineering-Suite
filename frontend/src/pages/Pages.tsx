@@ -9,6 +9,8 @@ const RotorView = lazy(() => import("../components/RotorView").then((m) => ({ de
 const Lazy = ({ children }: { children: JSX.Element }) => <Suspense fallback={<p className="muted">Loading 3D view…</p>}>{children}</Suspense>;
 import { MeridionalSketch, VelocityTriangles } from "../components/ImpellerSketches";
 import { safeName, saveFrom, saveProject } from "../files";
+import { RotorModel } from "../components/RotorModel";
+import { TrainModel } from "../components/TrainModel";
 import { SchemaForm } from "../components/SchemaForm";
 
 export type Ctx = {
@@ -462,8 +464,8 @@ export function RotorPage(c: Ctx) {
   const rot = k.rotor;
   const sh = k.shaft;
   const lat = k.lateral;
-  const fw = (lat.modes_at_mcs ?? []).filter((m: Json) => m.whirl === "forward" && m.shape);
-  const modeShape = mode >= 0 && fw[mode] ? { z: lat.z_m, shape: fw[mode].shape } : null;
+  const fw = (lat.modes_at_mcs ?? []).filter((m: Json) => m.shape).slice(0, 6);
+  const modeShape = mode >= 0 && fw[mode] ? { z: lat.z_m, shape: fw[mode].shape, whirl: fw[mode].whirl } : null;
   const scene = c.results.scene;
   const mp = k.mass_properties;
   return (
@@ -482,12 +484,13 @@ export function RotorPage(c: Ctx) {
           <h3 style={{ margin: 0 }}>3D rotor</h3>
           <div className="chips" style={{ margin: 0 }}>
             <button className={`chip ${mode < 0 ? "on" : ""}`} onClick={() => setMode(-1)}>Static</button>
-            {fw.slice(0, 4).map((m: Json, i: number) => <button key={i} className={`chip ${mode === i ? "on" : ""}`} onClick={() => setMode(i)}>
-              Mode {i + 1}: {fmt(m.freq_cpm, 0)} cpm, δ {fmt(m.logdec, 2)}</button>)}
+            {fw.map((m: Json, i: number) => <button key={i} className={`chip ${mode === i ? "on" : ""}`} onClick={() => setMode(i)}>
+              {m.whirl === "backward" ? "BW" : "FW"} {fmt(m.freq_cpm, 0)} cpm, δ {fmt(m.logdec, 2)}</button>)}
           </div>
         </div>
         {scene && <Lazy><RotorView scene={scene} mode={modeShape} /></Lazy>}
-        <p className="muted">Drag to orbit, scroll to zoom. Mode animation shows forward whirl of the damped mode shape at MCS (amplitude exaggerated).</p>
+        <p className="muted">Drag to orbit, scroll to zoom. Mode animation shows the whirl orbits (green forward, orange backward) and the deflected centreline of the damped mode at MCS (amplitude exaggerated).</p>
+        <RotorModel rotor={rot} z={lat.z_m} cg={mp.cg_m} h={250} modes={modeShape ? [{ shape: modeShape.shape, whirl: modeShape.whirl, label: `${fw[mode].whirl} ${fmt(fw[mode].freq_cpm, 0)} cpm`, color: modeShape.whirl === "backward" ? "#e5732e" : "#30a46c" }] : []} />
       </div>
       <div className="grid" style={{ marginTop: 14 }}>
         <div className="card">
@@ -688,6 +691,8 @@ export function LateralPage(c: Ctx) {
       {!bcase && tab !== "model" && <p className="muted">API 617-2022 bearing cases not available for this run.</p>}
 
       {tab === "model" && <>
+        <div className="card" style={{ marginBottom: 14 }}><h3>Rotor model — sections to scale (radius exaggerated), impellers, added masses, bearings, close clearances, stations</h3>
+          <RotorModel rotor={k.rotor} z={z} cg={lat.mass_properties.cg_m} h={280} /></div>
         <div className="grid">
           <div className="card"><h3>Rotor model</h3>
             <Table rows={k.rotor.sections} cols={[["Section", (s) => s.label], ["z0 mm", (s) => s.z0_m * 1e3, 1], ["z1 mm", (s) => s.z1_m * 1e3, 1],
@@ -733,6 +738,10 @@ export function LateralPage(c: Ctx) {
               layout={{ xaxis: { title: "Axial position z (m)" }, yaxis: { title: "Normalised deflection" }, shapes: brgLines }} />
           </div>
         </div>
+        <div className="card" style={{ marginTop: 14 }}><h3>Undamped mode shapes on the rotor model — {bcase.label}</h3>
+          <div className="grid">{bcase.undamped_modes.map((m: Json, j: number) => <RotorModel key={j} rotor={k.rotor} z={z} h={190} labels={false}
+            modes={[{ shape: m.shape, label: `Mode ${j + 1}: ${fmt(m.freq_rpm, 0)} rpm`, color: SERIES[j] }]} />)}</div>
+          <p className="muted small">Animated; open circles are nodal points. Dashed line is the opposite half-cycle.</p></div>
       </>}
 
       {tab === "unbalance" && bcase && <>
@@ -786,6 +795,7 @@ export function LateralPage(c: Ctx) {
         <div className="card" style={{ marginTop: 10 }}><h3>Deflected shapes — case {uc.case}</h3>
           <Plot height={380} data={uc.deflected_shapes.map((d: Json, i: number) => ({ x: z, y: d.shape_um, name: `${d.label === "Nmc" ? "Nmc" : "Critical"} ${fmt(d.speed_rpm, 0)} rpm`, mode: "lines", line: { color: SERIES[i % 8] } }))}
             layout={{ xaxis: { title: "Axial position z (m)" }, yaxis: { title: "Response major semi-axis (µm)" }, shapes: brgLines }} />
+          <RotorModel rotor={k.rotor} z={z} h={230} modes={uc.deflected_shapes.map((d: Json, i: number) => ({ shape: d.shape_um, label: `${d.label === "Nmc" ? "Nmc" : "Critical"} ${fmt(d.speed_rpm, 0)} rpm`, color: SERIES[i % 8] }))} />
         </div>
       </>}
 
@@ -817,6 +827,9 @@ export function LateralPage(c: Ctx) {
       </>}
 
       {tab === "level2" && s2 && <>
+        {(lat.modes_at_mcs ?? []).find((q: Json) => q.shape && q.whirl !== "backward") && (() => { const q = lat.modes_at_mcs.find((x: Json) => x.shape && x.whirl !== "backward");
+          return <div className="card" style={{ marginBottom: 10 }}><h3>First forward damped mode at MCS — {fmt(q.freq_cpm, 0)} cpm, log dec {fmt(q.logdec, 3)}</h3>
+            <RotorModel rotor={k.rotor} z={z} h={220} modes={[{ shape: q.shape, label: "Forward whirl", color: "#30a46c" }]} /></div>; })()}
         <div className="card"><h3>Final log decrement (API 617-2022 6.8.4.14)</h3>
           <Table rows={s2.level2} cols={[["Bearing case", (r) => r.label], ["Rotor + bearings δb", (r) => r.delta_b, 3], ["Freq cpm", (r) => r.freq_b_cpm, 0],
             ["+ seals, min seal clr δf", (r) => r.delta_f_min_seal ?? "–", 3], ["Freq cpm", (r) => r.freq_f_min_seal_cpm ?? "–", 0],
@@ -853,41 +866,6 @@ const ok = (p: boolean | null | undefined) => (p == null ? "–" : <span classNa
 const Proves = ({ children }: { children: Json }) => <p className="muted small">{children}</p>;
 
 /** Schematic of the train: motor → coupling → bull gear / pinion → coupling → compressor (or direct drive). */
-function TrainSchematic({ model }: { model: Json }) {
-  const comp = (n: string) => model.components.find((x: Json) => x.name === n || x.name.startsWith(n));
-  const rotors = model.components.filter((x: Json) => x.kind === "rotor");
-  const cpls = model.components.filter((x: Json) => x.kind === "coupling");
-  const drv = rotors[0];
-  const lbl = (x: Json) => `${fmt(x.speed_rpm, 0)} rpm · Ip ${fmt(x.ip_kgm2, 2)} kg·m²`;
-  const yl = 100, yh = model.geared ? 46 : 100;
-  const box = (x0: number, w: number, y: number, h: number, x: Json, col: string) => (
-    <g key={x.name}><rect x={x0} y={y - h / 2} width={w} height={h} rx={4} fill={col} fillOpacity={0.18} stroke={col} />
-      <text x={x0 + w / 2} y={y + 4} textAnchor="middle" fontSize={12} fill="currentColor">{x.name}</text>
-      <text x={x0 + w / 2} y={y + h / 2 + 13} textAnchor="middle" fontSize={10} fill="currentColor" opacity={0.75}>{lbl(x)}</text></g>);
-  const cpl = (x0: number, y: number, x: Json) => (
-    <g key={x.name}><rect x={x0} y={y - 9} width={36} height={18} fill="none" stroke={SERIES[4]} strokeDasharray="3 2" />
-      <text x={x0 + 18} y={y - 14} textAnchor="middle" fontSize={10} fill="currentColor">{`K ${fmt(x.stiffness_nm_rad / 1e6, 2)} MN·m/rad`}</text></g>);
-  const bull = comp("Bull gear"), pin = comp("Pinion"), cmp = comp("Compressor");
-  return (
-    <svg viewBox="0 0 760 160" style={{ width: "100%", maxWidth: 760 }} role="img" aria-label="Train schematic">
-      <line x1={10} x2={model.geared ? 320 : 740} y1={yl} y2={yl} stroke="currentColor" strokeWidth={3} opacity={0.5} />
-      {model.geared && <line x1={300} x2={740} y1={yh} y2={yh} stroke="currentColor" strokeWidth={3} opacity={0.5} />}
-      {box(10, 170, yl, 56, drv, SERIES[0])}
-      {cpls[0] && cpl(model.geared ? 196 : 300, yl, cpls[0])}
-      {model.geared && <g>
-        <circle cx={290} cy={yl} r={40} fill={SERIES[1]} fillOpacity={0.18} stroke={SERIES[1]} />
-        <circle cx={290} cy={yh} r={14} fill={SERIES[3]} fillOpacity={0.25} stroke={SERIES[3]} />
-        <text x={290} y={yl + 4} textAnchor="middle" fontSize={11} fill="currentColor">Bull gear</text>
-        <text x={312} y={yh - 18} fontSize={10} fill="currentColor">{`Pinion · ratio ${fmt(model.gear?.ratio, 4)}`}</text>
-        <text x={290} y={yl + 54} textAnchor="middle" fontSize={10} fill="currentColor" opacity={0.75}>{bull && lbl(bull)}</text>
-        <text x={312} y={yh + 26} fontSize={10} fill="currentColor" opacity={0.75}>{pin && `Ip ${fmt(pin.ip_kgm2, 3)} kg·m²`}</text>
-      </g>}
-      {cpls[1] && cpl(400, yh, cpls[1])}
-      {box(model.geared ? 470 : 380, model.geared ? 270 : 360, yh, 44, cmp, SERIES[2])}
-    </svg>
-  );
-}
-
 export function TorsionalPage(c: Ctx) {
   const r = c.results;
   const [m, setM] = useState(0);
@@ -923,7 +901,7 @@ export function TorsionalPage(c: Ctx) {
 
       <div className="card"><h3>1. Train model</h3>
         <Proves>Shows which rotors, couplings and gear mesh make up the model, with the inertias and stiffnesses that set every result below.</Proves>
-        <TrainSchematic model={md} />
+        <TrainModel model={md} />
         <div className="grid">
           <Table rows={comps} cols={[["Component", (x) => x.name], ["Speed rpm", (x) => x.speed_rpm, 0], ["Ip kg·m²", (x) => x.ip_kgm2, 3],
             ["K MN·m/rad", (x) => (x.stiffness_nm_rad ?? 0) / 1e6, 3], ["Max transient kN·m", (x) => (x.max_transient_torque_nm ? x.max_transient_torque_nm / 1e3 : "–"), 1],
@@ -973,6 +951,7 @@ export function TorsionalPage(c: Ctx) {
           const idx = stationRotor.map((s: string, k: number) => (s === n ? k : -1)).filter((k: number) => k >= 0);
           return { x: idx.map((k: number) => k + 1), y: idx.map((k: number) => modes[m]?.shape[k]), name: n, mode: "lines+markers", line: { color: SERIES[i % 8] }, marker: { size: 3 } };
         })} layout={{ xaxis: { title: "Station" }, yaxis: { title: "Normalised angle", range: [-1.1, 1.1] } }} />
+        {modes[m] && <TrainModel model={md} shape={modes[m].shape} label={`Mode ${modes[m].mode}: ${fmt(modes[m].freq_cpm, 0)} cpm`} />}
         <p className="muted small">Strain energy: {Object.entries(modes[m]?.strain_energy ?? {}).filter(([, v]: [string, Json]) => v > 0.01).map(([k, v]: [string, Json]) => `${k} ${fmt(v * 100, 0)} %`).join(" · ")}</p>
       </div>
 
