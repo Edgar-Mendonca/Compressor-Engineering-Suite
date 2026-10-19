@@ -45,7 +45,7 @@ def jsonable(obj: Any) -> Any:
     return obj
 
 
-REPORT_ONLY = ("test_tags", "test_doc")   # project fields that only label reports; they do not change results
+REPORT_ONLY = ("test_tags", "test_doc", "dynamics")   # project fields that only label reports; they do not change results
 
 
 def input_hash(inputs: Any) -> str:

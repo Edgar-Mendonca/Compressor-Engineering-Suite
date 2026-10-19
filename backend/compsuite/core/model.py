@@ -466,6 +466,7 @@ class Project(BaseModel):
     impeller_vendor: list[ImpellerVendor] = Field(default_factory=list, description="Optional vendor impeller data (overrides estimates)")
     test_tags: dict[str, Any] = Field(default_factory=dict, description="User instrument tags for the shop test pages and reports (key -> tag or {tag, description})")
     test_doc: dict[str, Any] = Field(default_factory=dict, description="Test report document data: number, revision, client, equipment tag, sign-off names")
+    dynamics: dict[str, Any] = Field(default_factory=dict, description="Dynamic simulation set-up: edited network (P&ID) and scenario; empty = built from the design")
 
     def design_case(self) -> OperatingCase:
         for c in self.cases:

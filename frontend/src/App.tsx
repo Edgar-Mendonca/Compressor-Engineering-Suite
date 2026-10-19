@@ -7,10 +7,11 @@ import { bridge, onToast, openProject, recent, saveProject, type Toast } from ".
 import { STEPS, TutorialCard } from "./Tutorial";
 import * as P from "./pages/Pages";
 /** Project inputs that change results (report labels such as test tags and document data excluded). */
-const runKey = (p: Json) => JSON.stringify(p ? { ...p, test_tags: undefined, test_doc: undefined } : p);
+const runKey = (p: Json) => JSON.stringify(p ? { ...p, test_tags: undefined, test_doc: undefined, dynamics: undefined } : p);
 
 // Heavy pages load on first use so the app starts quickly.
 const ImpellerFEAPage = lazy(() => import("./pages/ImpellerFEA").then((m) => ({ default: m.ImpellerFEAPage })));
+const DynamicsPage = lazy(() => import("./pages/Dynamics").then((m) => ({ default: m.DynamicsPage })));
 const MechRunTestPage = lazy(() => import("./pages/MechRunTest").then((m) => ({ default: m.MechRunTestPage })));
 const ShopTestsPage = lazy(() => import("./pages/ShopTests").then((m) => ({ default: m.ShopTestsPage })));
 const PerfTestPage = lazy(() => import("./pages/PerfTest").then((m) => ({ default: m.PerfTestPage })));
@@ -18,7 +19,7 @@ const PerfTestPage = lazy(() => import("./pages/PerfTest").then((m) => ({ defaul
 const RENDER: Record<string, (c: P.Ctx) => JSX.Element> = {
   project: (c) => <P.ProjectPage {...c} />, gas: (c) => <P.GasCasesPage {...c} />, thermo: (c) => <P.ThermoPage {...c} />,
   compressor: (c) => <P.CompressorPage {...c} />, impellers: (c) => <P.ImpellerPage {...c} />, impfea: (c) => <ImpellerFEAPage {...c} />, rotor: (c) => <P.RotorPage {...c} />,
-  bearings: (c) => <P.BearingsSealsPage {...c} />, lateral: (c) => <P.LateralPage {...c} />, torsional: (c) => <P.TorsionalPage {...c} />,
+  bearings: (c) => <P.BearingsSealsPage {...c} />, lateral: (c) => <P.LateralPage {...c} />, torsional: (c) => <P.TorsionalPage {...c} />, dynamics: (c) => <DynamicsPage {...c} />,
   materials: (c) => <P.MaterialsPage {...c} />, aux: (c) => <P.AuxPage {...c} />, optimize: (c) => <P.OptimizePage {...c} />,
   shoptest: (c) => <ShopTestsPage {...c} />, mrt: (c) => <MechRunTestPage {...c} />, perftest: (c) => <PerfTestPage {...c} />, verify: (c) => <P.VerificationPage {...c} />, reports: (c) => <P.ReportsPage {...c} />,
 };

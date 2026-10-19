@@ -601,6 +601,52 @@ def mrt_pdf(req: MRTRequest):
                     headers={"Content-Disposition": f'attachment; filename="{req.project.name.replace(" ", "_")}_MRT.pdf"'})
 
 
+class DynRequest(BaseModel):
+    project: Project
+    network: Optional[dict[str, Any]] = None        # edited P&ID; None = project.dynamics.network or the default
+    scenario: Any = "esd"                           # preset key or a full scenario dict
+    reset: bool = False
+    all: bool = False                               # report: run every preset for the comparison table
+    images: dict[str, str] = Field(default_factory=dict)
+
+
+def _dyn(req: DynRequest):
+    from compsuite.dynamics import network as DN
+    net = None if req.reset else (req.network or req.project.dynamics.get("network"))
+    net = net or DN.default_network(req.project, jsonable(_run_cached(req.project, "full")))
+    sc = req.scenario if isinstance(req.scenario, dict) else DN.scenario(req.scenario, net)
+    return DN, net, sc
+
+
+@app.post("/api/dynamics/model")
+def dynamics_model(req: DynRequest):
+    DN, net, _ = _dyn(req)
+    return {"network": net, "scenarios": {k: DN.scenario(k, net) for k in DN.SCENARIOS}}
+
+
+@app.post("/api/dynamics/run")
+def dynamics_run(req: DynRequest):
+    from compsuite.dynamics.engine import simulate
+    _, net, sc = _dyn(req)
+    try:
+        return {**simulate(net, sc), "scenario": sc}
+    except (KeyError, StopIteration, ValueError) as exc:
+        raise HTTPException(422, f"Network or scenario error: {exc}") from exc
+
+
+@app.post("/api/dynamics/report.pdf")
+def dynamics_report(req: DynRequest):
+    from compsuite.dynamics.engine import simulate
+    from compsuite.dynamics.report import dynamics_report as rep
+    from compsuite.reporting import prism
+    DN, net, sc = _dyn(req)
+    res = simulate(net, sc)
+    comp = [(k, DN.SCENARIOS[k]["title"], simulate(net, DN.scenario(k, net))["summary"]) for k in DN.SCENARIOS] if req.all else []
+    with prism._LOCK:
+        pdf = rep(req.project, net, sc, res, comp, req.images.get("pid"))
+    return _pdf(pdf, req.project, "dynamics")
+
+
 class RDReportRequest(BaseModel):
     project: Project
     casing: int = 0

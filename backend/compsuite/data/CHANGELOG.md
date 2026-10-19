@@ -3,6 +3,13 @@
 Release notes shown on the launcher. Newest first. Releases are published
 from version tags (vX.Y.Z) with a Windows installer attached.
 
+## 0.5.6 - 2026-10-20
+- New module **Dynamics & anti-surge**: time-domain simulation of the compressor system built from the design (performance map, real-gas properties, volumes, cooler, check valve, ESD, anti-surge and hot-gas bypass valves, driver and the train inertia from the torsional model, anti-surge controller with control line and trip line)
+- Studies: emergency shutdown, ESD with hot-gas bypass, normal stop, driver trip, blocked discharge, deep surge (controller out of service), start-up from settle-out and a speed step; every event can be edited (trip, valve moves, controller on / off, speed set-point)
+- Editable P&ID: drag the equipment, edit any vessel, valve, the compressor, the driver or the controller, add volumes, coolers, valves, check valves and piping
+- Animation: flow along the lines (direction and size), valve openings, live pressure / temperature tags, the operating point moving on the map with the surge and control lines, live trends of margin, speed, pressures, flows, valve positions, power and temperature
+- Dynamic simulation report in the house style (P&ID, model tables, events, map trajectory, trends, comparison of all studies, conclusions, sign-off)
+
 ## 0.5.5 - 2026-10-19
 - 3D FEA viewer: element mesh lines over the results, crisp colour bands (8-16, or smooth) with a labelled colour bar, MAX / MIN markers with values, faint undeformed outline, front / back / side / sector / iso views, fit, axis triad, report-quality picture export (white, 3x) and "Add to report" pictures
 - FEA report rebuilt in the house style (cover, contents, sign-off) with banded contour pictures and MAX / MIN, mesh pictures, further fields, hot-spot table, stress along paths, bore contact and shrink fit, spin test, permanent deformation, Campbell / SAFE, mode shapes and the Goodman diagram
