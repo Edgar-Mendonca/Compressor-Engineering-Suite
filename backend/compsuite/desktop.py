@@ -226,7 +226,12 @@ def main() -> int:
     if FROZEN and sys.stdout is None:  # windowed build: keep a log instead of a console
         sys.stdout = sys.stderr = open(data_dir() / "centriforge.log", "w", buffering=1, encoding="utf-8")
     if "--selftest" in sys.argv:
-        return selftest()
+        try:
+            return selftest()
+        except Exception:  # noqa: BLE001 - report and exit: an unhandled error opens a dialog that blocks the build
+            import traceback
+            traceback.print_exc()
+            return 1
     try:
         import webview
     except ImportError:

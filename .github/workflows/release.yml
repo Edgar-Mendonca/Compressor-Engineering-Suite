@@ -50,6 +50,7 @@ jobs:
         working-directory: packaging
         run: pyinstaller --noconfirm centriforge.spec
       - name: Self-test the bundle
+        timeout-minutes: 10
         working-directory: packaging
         shell: bash
         env:

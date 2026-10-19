@@ -7,6 +7,7 @@ import io
 import math
 from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
 from jinja2 import Environment, select_autoescape
 
@@ -195,6 +196,8 @@ def report_pdf(project, res: dict) -> bytes:
     from compsuite.testing.mrt import cover_info, doc_info
     cas = res["casings"][0]
     lat, sm, ck = cas["lateral"], res["summary"], res["checklist"]
+    L_ = max(x["z1_m"] for x in cas["rotor"]["sections"])
+    zn = lat.get("z_m") or list(np.linspace(0, L_, 21))          # node list (absent at the fast run level)
     info = doc_info(project, "Compressor design report")
     buf = io.BytesIO()
 
@@ -217,7 +220,7 @@ def report_pdf(project, res: dict) -> bytes:
         cnt = ck["counts"]
         d.cover("Compressor design report", cover_info(project, info, [("Configuration", sm.get("configuration", "-")), ("Speed", f"{sm['speed_rpm']:.0f} rpm"),
                                                                       ("Stages / casings", f"{sm['stages']} / {sm['casings']}"), ("Shaft power", f"{sm['shaft_power_kw']:.0f} kW")]),
-                None, lambda ax: rotor_drawing(ax, cas["rotor"], lat["z_m"]),
+                None, lambda ax: rotor_drawing(ax, cas["rotor"], zn),
                 [("Checklist pass", str(cnt.get("pass", 0)), "pass"), ("Checklist fail", str(cnt.get("fail", 0)), "fail" if cnt.get("fail") else "pass"),
                  ("Attention", str(cnt.get("attention", 0)), "attention" if cnt.get("attention") else "pass"), ("For review", str(cnt.get("review", 0)), "review"),
                  ("Lateral (API 617)", "", "pass" if lat.get("conclusion", {}).get("pass") else "review"),
@@ -253,7 +256,7 @@ def report_pdf(project, res: dict) -> bytes:
         table(d, "Impeller stresses (2D axisymmetric FEA)", _rows(jsonable((cas.get("impeller_fea") or {}).get("impellers", [])), n=8))
 
         d.page("4  Rotor, shaft and thrust")
-        rotor_drawing(d.drawing([0.05, d.y - 0.22, 0.9, 0.21]), cas["rotor"], lat["z_m"])
+        rotor_drawing(d.drawing([0.05, d.y - 0.22, 0.9, 0.21]), cas["rotor"], zn)
         d.y -= 0.24
         mp = cas["mass_properties"]
         d.line(f"Rotor mass {mp['mass_kg']:.0f} kg, CG {mp['cg_m'] * 1e3:.0f} mm, Ip {mp['ip_kgm2']:.2f} kg m2; bearing span {cas['rotor']['bearing_span_m'] * 1e3:.0f} mm "
@@ -301,7 +304,11 @@ def report_pdf(project, res: dict) -> bytes:
             train_drawing(d.drawing([0.05, d.y - 0.2, 0.9, 0.19]), t["model"])
             d.y -= 0.22
         table(d, "Torsional natural frequencies", _rows(jsonable(t.get("tnf", [])), ["mode", "freq_hz", "freq_cpm"]))
-        fig(d, F.torsional_interference(t), 0.36, "Interference diagram")
+        if t.get("campbell") or t.get("interference"):
+            try:
+                fig(d, F.torsional_interference(t), 0.36, "Interference diagram")
+            except (KeyError, TypeError, ValueError):
+                d.line("Interference diagram not available at this run level.", 7.5, "#5b6878")
 
         d.page("8  Verification checklist")
         d.line(f"{cnt.get('pass', 0)} pass, {cnt.get('fail', 0)} fail, {cnt.get('attention', 0)} attention, {cnt.get('review', 0)} for review.", 8, bold=True)
