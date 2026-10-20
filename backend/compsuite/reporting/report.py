@@ -269,8 +269,8 @@ def report_pdf(project, res: dict) -> bytes:
         if isinstance(b, dict):
             table(d, "Journal bearings", _rows([{"bearing": k, **v.get("geometry", {})} for k, v in b.items()]))
             for k, v in b.items():
-                rw = [{"speed_rpm": r["speed_rpm"], **{f"{q}_mn_m": r[q] / 1e6 for q in ("kxx", "kyy", "kxy")}, **{f"{q}_kn_s_m": r[q] / 1e3 for q in ("cxx", "cyy")}}
-                      for r in v.get("rows", [])]
+                rw = [{"speed_rpm": r.get("speed_rpm", n_), **{f"{q}_mn_m": r.get(q, 0) / 1e6 for q in ("kxx", "kyy", "kxy")},
+                       **{f"{q}_kn_s_m": r.get(q, 0) / 1e3 for q in ("cxx", "cyy")}} for n_, r in zip(v.get("speeds_rpm") or [None] * len(v.get("rows", [])), v.get("rows", [])) if isinstance(r, dict)]
                 table(d, f"{k} - dynamic coefficients vs speed (K in MN/m, C in kN s/m)", _rows(rw))
         se = jsonable(cas["seals"])
         table(d, "Labyrinth seals", _rows(se.get("labyrinths", []), n=7))
