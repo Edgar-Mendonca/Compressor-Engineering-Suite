@@ -23,7 +23,7 @@ SCENARIOS = {
                 "events": [{"t": 2, "action": "valve", "id": "XV-102", "open": 0}]},
     "surge": {"title": "Driver trip with the anti-surge controller out of service (deep surge)", "duration_s": 20,
               "events": [{"t": 0, "action": "controller", "id": "UIC-100", "on": False}, {"t": 2, "action": "trip"}]},
-    "startup": {"title": "Start-up from settle-out on full recycle, speed ramp, export valve opens", "duration_s": 60, "settled": True,
+    "startup": {"title": "Start-up from settle-out on full recycle, speed ramp, export valve opens", "settled": True,
                 "initial": [{"t": 0, "action": "speed", "value": 0}, {"t": 0, "action": "valve", "id": "XV-102", "open": 0}, {"t": 0, "action": "valve", "id": "FV-100", "open": 1}],
                 "events": [{"t": 1, "action": "speed", "value": 1.0}, {"t": 55, "action": "release", "id": "FV-100"}, {"t": 60, "action": "release", "id": "XV-102"}],
                 "duration_s": 90},

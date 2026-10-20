@@ -15,6 +15,8 @@ bearing tables, no Campbell/maps refinement) for optimisation loops.
 
 from __future__ import annotations
 
+import logging
+
 import math
 import time
 
@@ -51,7 +53,8 @@ def _gas_summary(gas, project) -> dict:
     dews = []
     try:
         dews = gas.dew_points(case.suction_pressure_bara * 1e5)
-    except Exception:  # noqa: BLE001 - phase solver failures are reported as unknown
+    except Exception as exc:  # noqa: BLE001 - phase solver failures are reported as unknown
+        logging.getLogger(__name__).warning("fallback at workflow.py:54: %s", exc)
         pass
     return {"composition": gas.composition, "mw": gas.mw(), "engine": getattr(gas, "engine", "built-in"),
             "suction_state": st, "hydrocarbon_dew_point_c": k_to_c(max(dews)) if dews else None,

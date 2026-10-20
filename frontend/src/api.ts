@@ -12,7 +12,9 @@ async function req(method: string, url: string, body?: unknown, signal?: AbortSi
     let detail = `${res.status} ${res.statusText}`;
     try {
       const j = await res.json();
-      detail = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail ?? j);
+      detail = typeof j.detail === "string" ? j.detail
+        : Array.isArray(j.detail) ? j.detail.map((d: { loc?: unknown[]; msg?: string }) => `${(d.loc ?? []).slice(1).join(" › ")}: ${(d.msg ?? "").replace(/^Value error, /, "")}`).join("\n")
+          : JSON.stringify(j.detail ?? j);
     } catch {
       /* keep status text */
     }

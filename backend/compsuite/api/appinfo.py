@@ -21,6 +21,7 @@ import urllib.request
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
 
 from compsuite import APP_NAME, GITHUB_REPO, RELEASE_DATE, __version__
 from compsuite.core.paths import FROZEN, data_dir, database_path
@@ -127,3 +128,23 @@ def apply_update():
 @router.get("/update/status")
 def update_status():
     return _state
+
+
+@router.get("/diagnostics", response_class=PlainTextResponse)
+def diagnostics() -> str:
+    """Plain-text diagnostics for bug reports: versions, platform, data folder and the tail of the logs (no project data)."""
+    import platform
+
+    import numpy
+    import scipy
+
+    from compsuite import __version__
+    from compsuite.core.paths import data_dir
+    lines = [f"CentriForge {__version__}", f"Python {sys.version.split()[0]} on {platform.platform()}", f"numpy {numpy.__version__}, scipy {scipy.__version__}",
+             f"frozen: {getattr(sys, 'frozen', False)}", f"data folder: {data_dir()}"]
+    for name in ("centriforge.log", "server.log"):
+        f = data_dir() / name
+        if f.exists():
+            tail = f.read_text(encoding="utf-8", errors="replace").splitlines()[-120:]
+            lines += ["", f"--- {name} (last {len(tail)} lines) ---", *tail]
+    return "\n".join(lines)

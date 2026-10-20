@@ -3,6 +3,14 @@
 Release notes shown on the launcher. Newest first. Releases are published
 from version tags (vX.Y.Z) with a Windows installer attached.
 
+## 0.5.7 - 2026-10-20
+- New module **CFD-lite flow**: (A) hub-to-shroud flow field by streamline curvature through the inlet, impeller and vaneless diffuser (relative Mach, velocities, pressure, temperature, flow angle); (B) blade-to-blade loading on hub / mid / shroud with diffusion ratio, pressure-side reversal and inducer choke margin, plus the mid-span passage field; (C) vaneless diffuser with friction, rotating-stall margin and volute radial force; (D) return-channel vane cascade by a panel method (loading, deviation, streamlines); (E) CFD case export (TurboGrid-style curves, boundary conditions, field CSV); animated particles in every field; CFD-lite report
+- Robustness: physical limits on the inputs with clear messages (for example a negative pressure or an efficiency entered in %); discharge must be above suction
+- Robustness: every report is tested for every example and run level; a browser smoke test opens every page in CI; lint (ruff) in CI
+- Robustness: unexpected engine errors reach the app as a readable message; silent fallbacks now write a warning to the log; File > Copy diagnostics collects the version, platform and log tail for a bug report
+- The page code is split into one file per domain; unused code removed
+- FEA: the von Mises minimum can no longer show a small negative value; the design report gives bearing coefficients in MN/m and kN s/m
+
 ## 0.5.6 - 2026-10-20
 - New module **Dynamics & anti-surge**: time-domain simulation of the compressor system built from the design (performance map, real-gas properties, volumes, cooler, check valve, ESD, anti-surge and hot-gas bypass valves, driver and the train inertia from the torsional model, anti-surge controller with control line and trip line)
 - Studies: emergency shutdown, ESD with hot-gas bypass, normal stop, driver trip, blocked discharge, deep surge (controller out of service), start-up from settle-out and a speed step; every event can be edited (trip, valve moves, controller on / off, speed set-point)

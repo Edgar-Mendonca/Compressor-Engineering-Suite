@@ -53,7 +53,6 @@ class Bridge:
         self._settings.write_text(json.dumps(d, indent=1))
 
     def _dialog(self, kind, name="", types=()):
-        import webview
         from pathlib import Path
         folder = self._get("last_folder") or str(Path.home() / "Documents")
         r = self._window.create_file_dialog(kind, directory=folder, save_filename=name, file_types=types)

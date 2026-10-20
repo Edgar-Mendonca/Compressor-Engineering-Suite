@@ -16,6 +16,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y calculix-ccx
       - name: Install package
         run: pip install -e "backend[test,coolprop]"
+      - name: Lint (ruff, errors and unused code)
+        run: pip install ruff && ruff check backend/compsuite --select F,E9
       - name: Tests
         working-directory: backend
         run: pytest -q
@@ -33,3 +35,26 @@ jobs:
           npm ci
           npm run build
 
+
+  ui-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Install app and browser
+        run: |
+          pip install -e "backend[coolprop]" playwright
+          python -m playwright install --with-deps chromium
+      - name: Open every page with the example project
+        timeout-minutes: 20
+        run: python tests_ui/smoke.py

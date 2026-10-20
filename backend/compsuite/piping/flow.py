@@ -111,7 +111,6 @@ def piping_analysis(gas, comp_design: dict, perf_map: dict, project) -> dict:
                               "Recycle valve sized for design flow from discharge to suction pressure",
                               f"System curve: {pd.system_static_pressure_fraction:.0%} static + friction ~ Q^2"],
                  references=["Crane TP-410", "IEC 60534-2-1:2011", "ISO 5167-2:2003"])
-    cd = project.design_case()
     s, d = comp_design["suction"], comp_design["discharge"]
     m = comp_design["mass_flow_kg_s"]
     out = {}

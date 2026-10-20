@@ -23,6 +23,8 @@ Preliminary engineering: geometry is parametric from the stage design, not CAD.
 
 from __future__ import annotations
 
+import logging
+
 import math
 
 import numpy as np
@@ -409,7 +411,7 @@ def surface_faces(m: dict):
 def classify(m: dict, faces):
     """Tag faces: bore, back (disk rear), passage hub, passage shroud, shroud front, blade PS/SS, tip, eye."""
     tags = {}
-    nb, npz = m["nb"], m["npz"]
+    nb = m["nb"]
     for e, name in faces:
         i, j, k = m["ijk"][e]
         z = m["zone"][e]
@@ -464,10 +466,11 @@ def _fields(sec: Sector, u, S, extra=None):
     th = np.arctan2(X[:, 1], X[:, 0])
     U = u.reshape(-1, 3)
     ur = U[:, 0] * np.cos(th) + U[:, 1] * np.sin(th)
-    out = {"von_mises_mpa": _gauss_to_nodes(m, vm) / 1e6, "max_principal_mpa": _gauss_to_nodes(m, p1) / 1e6,
+    # von Mises and equivalent strain are extrapolated from the Gauss points; they cannot be negative
+    out = {"von_mises_mpa": np.maximum(_gauss_to_nodes(m, vm), 0) / 1e6, "max_principal_mpa": _gauss_to_nodes(m, p1) / 1e6,
            "hoop_mpa": _gauss_to_nodes(m, stt) / 1e6, "radial_mpa": _gauss_to_nodes(m, srr) / 1e6, "axial_mpa": _gauss_to_nodes(m, szz) / 1e6,
            "ur_um": ur * 1e6, "uz_um": U[:, 2] * 1e6, "disp_um": np.linalg.norm(U, axis=1) * 1e6,
-           "strain_ue": _gauss_to_nodes(m, vm / sec.E * 1e6 / (1 + sec.nu) * 1.0), "_u": U}
+           "strain_ue": np.maximum(_gauss_to_nodes(m, vm / sec.E * 1e6 / (1 + sec.nu)), 0), "_u": U}
     if extra:
         out.update(extra)
     return out
@@ -506,7 +509,8 @@ def modes(sec: Sector, nd: int, n_modes: int, Kextra=None):
     sigma = -1.0
     try:
         w2, v = spla.eigsh(Kr.tocsc(), k=n_modes, M=Mr.tocsc(), sigma=sigma, which="LM")
-    except Exception:  # fallback dense for tiny models
+    except Exception as exc:  # fallback dense for tiny models
+        logging.getLogger(__name__).warning("fallback at impeller3d.py:509: %s", exc)
         import scipy.linalg as sl
         w2, v = sl.eigh(Kr.toarray(), Mr.toarray())
         w2, v = w2[:n_modes], v[:, :n_modes]
@@ -728,7 +732,6 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
 
     # summary values
     mc = out_cases["MCS combined"]
-    solid = np.ones(len(X), bool)
     vm_peak = float(mc["von_mises_mpa"].max())
     loc = X[int(np.argmax(mc["von_mises_mpa"]))]
     sig_th_avg = float(np.sum(cylindrical(cases["Centrifugal MCS"][1], sec.Xg)[1].mean(1) * sec.vol) / sec.vol.sum())
@@ -909,7 +912,7 @@ def to_vtu(res: dict, full: bool = True) -> str:
     m = sec.m
     X, E_ = sec.nodes, sec.els
     Z = m["Z"] if full else 1
-    pts, cells, data = [], [], {}
+    pts, cells = [], []
     for s in range(Z):
         a = s * m["alpha"]
         R = np.array([[math.cos(a), -math.sin(a), 0], [math.sin(a), math.cos(a), 0], [0, 0, 1]])

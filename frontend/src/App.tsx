@@ -3,7 +3,7 @@ import { api, type Json } from "./api";
 import { Launcher } from "./Launcher";
 import { GROUPS, MODULES, num } from "./modules";
 import { NewProject } from "./NewProject";
-import { bridge, onToast, openProject, recent, saveProject, type Toast } from "./files";
+import { bridge, onToast, openProject, recent, saveBlob, saveProject, type Toast } from "./files";
 import { STEPS, TutorialCard } from "./Tutorial";
 import * as P from "./pages/Pages";
 /** Project inputs that change results (report labels such as test tags and document data excluded). */
@@ -11,6 +11,7 @@ const runKey = (p: Json) => JSON.stringify(p ? { ...p, test_tags: undefined, tes
 
 // Heavy pages load on first use so the app starts quickly.
 const ImpellerFEAPage = lazy(() => import("./pages/ImpellerFEA").then((m) => ({ default: m.ImpellerFEAPage })));
+const CfdPage = lazy(() => import("./pages/Cfd").then((m) => ({ default: m.CfdPage })));
 const DynamicsPage = lazy(() => import("./pages/Dynamics").then((m) => ({ default: m.DynamicsPage })));
 const MechRunTestPage = lazy(() => import("./pages/MechRunTest").then((m) => ({ default: m.MechRunTestPage })));
 const ShopTestsPage = lazy(() => import("./pages/ShopTests").then((m) => ({ default: m.ShopTestsPage })));
@@ -18,7 +19,7 @@ const PerfTestPage = lazy(() => import("./pages/PerfTest").then((m) => ({ defaul
 
 const RENDER: Record<string, (c: P.Ctx) => JSX.Element> = {
   project: (c) => <P.ProjectPage {...c} />, gas: (c) => <P.GasCasesPage {...c} />, thermo: (c) => <P.ThermoPage {...c} />,
-  compressor: (c) => <P.CompressorPage {...c} />, impellers: (c) => <P.ImpellerPage {...c} />, impfea: (c) => <ImpellerFEAPage {...c} />, rotor: (c) => <P.RotorPage {...c} />,
+  compressor: (c) => <P.CompressorPage {...c} />, impellers: (c) => <P.ImpellerPage {...c} />, impfea: (c) => <ImpellerFEAPage {...c} />, cfd: (c) => <CfdPage {...c} />, rotor: (c) => <P.RotorPage {...c} />,
   bearings: (c) => <P.BearingsSealsPage {...c} />, lateral: (c) => <P.LateralPage {...c} />, torsional: (c) => <P.TorsionalPage {...c} />, dynamics: (c) => <DynamicsPage {...c} />,
   materials: (c) => <P.MaterialsPage {...c} />, aux: (c) => <P.AuxPage {...c} />, optimize: (c) => <P.OptimizePage {...c} />,
   shoptest: (c) => <ShopTestsPage {...c} />, mrt: (c) => <MechRunTestPage {...c} />, perftest: (c) => <PerfTestPage {...c} />, verify: (c) => <P.VerificationPage {...c} />, reports: (c) => <P.ReportsPage {...c} />,
@@ -158,6 +159,10 @@ export default function App() {
             <button disabled={!project} onClick={() => fileSave(true)}>Save as…<span>Ctrl+Shift+S</span></button>
             {bridge() && recent().length > 0 && <><div className="mono caps muted sep">Recent files</div>
               {recent().map((r) => <button key={r.path} onClick={() => fileOpen(r.path)} title={r.path}>{r.name}<span>{r.path.split(/[\\/]/).slice(-2, -1)[0]}</span></button>)}</>}
+            <div className="mono caps muted sep">Help</div>
+            <button onClick={async () => { setMenu(false); const t = await (await fetch("/api/app/diagnostics")).text();
+              try { await navigator.clipboard.writeText(t); alert("Diagnostics copied: paste them into your bug report."); }
+              catch { saveBlob(new Blob([t], { type: "text/plain" }), "centriforge-diagnostics.txt"); } }}>Copy diagnostics</button>
           </div>}
         </div>
         <nav className="tabs">

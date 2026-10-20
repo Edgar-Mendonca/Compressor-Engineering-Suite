@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import math
 
 from compsuite.core.trace import record
@@ -72,7 +74,8 @@ def seal_gas_conditioning(gas, p_supply: float, T_supply: float, p_vent: float, 
         T_guess = T
         try:
             dews = gas.dew_points(P)
-        except Exception:  # noqa: BLE001 - phase solver may fail near critical; report as unknown
+        except Exception as exc:  # noqa: BLE001 - phase solver may fail near critical; report as unknown
+            logging.getLogger(__name__).warning("fallback at seals.py:75: %s", exc)
             dews = []
         dew = max(dews) if dews else None
         path.append({"P_bara": P / 1e5, "T_c": T - 273.15, "dew_c": dew - 273.15 if dew else None,
@@ -109,7 +112,6 @@ def seal_analysis(gas, sizing: dict, impellers: list[dict], project, rotor_geom:
     omega = sizing["speed_rpm"] * math.pi / 30
     m = sizing["mass_flow_kg_s"]
     mw = gas.mw()
-    T1 = stages[0]["T_in_c"] + 273.15
     P1 = stages[0]["P_in_bara"] * 1e5
     P_d = stages[-1]["P_out_bara"] * 1e5
     T_d = stages[-1]["T_out_c"] + 273.15

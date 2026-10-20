@@ -10,6 +10,8 @@ matplotlib fallback.
 
 from __future__ import annotations
 
+import logging
+
 import io
 import math
 import textwrap
@@ -109,7 +111,8 @@ def _png(spec: dict, legend: str = "best") -> bytes:
     try:
         from compsuite.reporting.prism import render
         return render(spec, {"width_in": 6.4, "height_in": 4.2, "font_size": 10, "legend": legend}, "png", dpi=200)["content"]
-    except Exception:  # noqa: BLE001 - concurrent edits / missing fonts must not break the report
+    except Exception as exc:  # noqa: BLE001 - concurrent edits / missing fonts must not break the report
+        logging.getLogger(__name__).warning("fallback at report.py:112: %s", exc)
         return _fallback_png(spec)
 
 

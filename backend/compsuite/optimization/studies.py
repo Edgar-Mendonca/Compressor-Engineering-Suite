@@ -15,6 +15,8 @@ problems OpenMDAO is the intended integration path.
 
 from __future__ import annotations
 
+import logging
+
 from typing import Callable
 
 import numpy as np
@@ -85,7 +87,8 @@ def evaluate(project: Project, metrics: list[str], level: str = "fast") -> dict:
     for m in metrics:
         try:
             out[m] = float(METRICS[m](res))
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning("fallback at studies.py:88: %s", exc)
             out[m] = None
     return out
 

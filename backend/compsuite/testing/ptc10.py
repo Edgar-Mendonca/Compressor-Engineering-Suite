@@ -20,6 +20,8 @@ The Mach and Reynolds limit lines are linear fits of PTC 10 Figs 3-2.1-1 and
 
 from __future__ import annotations
 
+import logging
+
 import math
 
 import numpy as np
@@ -229,7 +231,8 @@ def screen(project, res: dict, sp: dict, opts: dict, crit: list[float]) -> list[
             P1 = bar_to_pa(float(p))
             try:
                 dew = tg.dew_points(P1, 150.0, t1 + 60, 40)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger(__name__).warning("fallback at ptc10.py:232: %s", exc)
                 dew = []
             tdew = max(dew) if dew else None
             if tdew is not None and tdew > t1 - 5:
@@ -516,7 +519,8 @@ def ptc10_analysis(project, res: dict, options: dict | None = None, logs: dict |
                 try:
                     r_ = stack(spec_gas, dict(res["sizing"], stages=[s for s in res["sizing"]["stages"] if s["section"] == sp["section"] - 1]),
                                db, m_d * x * fr, sp["T1"], sp["P1"], fr)
-                except Exception:  # noqa: BLE001
+                except Exception as exc:  # noqa: BLE001
+                    logging.getLogger(__name__).warning("fallback at ptc10.py:519: %s", exc)
                     continue
                 if r_.get("valid"):
                     pts.append({"q_sp_m3_s": m_d * x * fr / sp["rho1"], "qv_m3_h": m_d * x * fr / sp["rho1"] * 3600, "head_kj_kg": r_["head"] / 1e3,

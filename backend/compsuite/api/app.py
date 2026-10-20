@@ -32,6 +32,16 @@ app = FastAPI(title=APP_NAME, version=__version__,
               description="Preliminary compressor engineering calculations. Not a certificate of compliance.")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+
+@app.exception_handler(Exception)
+async def _unexpected(request, exc: Exception):
+    """Unexpected engine errors reach the app as a readable message (and the log), not a bare 500."""
+    import logging
+    from fastapi.responses import JSONResponse
+    logging.getLogger("compsuite").exception("error in %s", request.url.path)
+    return JSONResponse(status_code=500, content={"detail": f"Engine error in {request.url.path}: {type(exc).__name__}: {exc}. "
+                                                             "If it repeats, use File > Copy diagnostics and send it with the project file."})
+
 app.include_router(appinfo_router)
 store = Store(database_path())
 
@@ -599,6 +609,57 @@ def mrt_pdf(req: MRTRequest):
         pdf = mrt_report(req.project, out, req.images)
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{req.project.name.replace(" ", "_")}_MRT.pdf"'})
+
+
+class CfdRequest(BaseModel):
+    project: Project
+    casing: int = 0
+    impeller: int = 0
+    images: dict[str, str] = Field(default_factory=dict)
+
+
+_cfd_cache: "OrderedDict[str, tuple]" = OrderedDict()
+
+
+def _cfd(req: CfdRequest):
+    from compsuite.aero.cfdlite import analyse
+    res = jsonable(_run_cached(req.project, "full"))
+    try:
+        cas = res["casings"][req.casing]
+        imp = cas["impellers"]["impellers"][req.impeller]
+    except (IndexError, KeyError) as exc:
+        raise HTTPException(404, "No such casing / impeller") from exc
+    key = f"{input_hash(req.project)}:{req.casing}:{req.impeller}"
+    if key not in _cfd_cache:
+        st = next(s for s in res["sizing"]["stages"] if s["index"] == imp["index"])
+        case = next((c for c in res["cases"] if str(c.get("case", "")).lower().startswith("rated")), res["cases"][0])
+        _cfd_cache[key] = (analyse(imp, st, case["suction"]), imp)
+        while len(_cfd_cache) > 8:
+            _cfd_cache.popitem(last=False)
+    return _cfd_cache[key]
+
+
+@app.post("/api/cfd")
+def cfd(req: CfdRequest):
+    return _cfd(req)[0]
+
+
+@app.post("/api/cfd/export.zip")
+def cfd_export(req: CfdRequest):
+    from compsuite.aero.cfdlite import export_zip
+    r, imp = _cfd(req)
+    return Response(export_zip(imp, r, req.project.name), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{req.project.name.replace(" ", "_")}_impeller{r["impeller"]}_cfd.zip"'})
+
+
+@app.post("/api/cfd/report.pdf")
+def cfd_report(req: CfdRequest):
+    from compsuite.aero.cfdlite_report import cfd_report as rep
+    from compsuite.reporting import prism
+    r, imp = _cfd(req)
+    with prism._LOCK:
+        pdf = rep(req.project, r, imp, req.images)
+    return _pdf(pdf, req.project, f"cfd_impeller{r['impeller']}")
 
 
 class DynRequest(BaseModel):

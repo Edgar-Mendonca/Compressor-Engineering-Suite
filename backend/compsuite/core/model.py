@@ -12,7 +12,23 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+
+class Checked(BaseModel):
+    """Physical limits per field ({name: (low, high, meaning)}); a value outside them is rejected with a clear message."""
+    _LIMITS: dict = {}
+
+    @model_validator(mode="after")
+    def _limits(self):
+        bad = []
+        for k, (lo, hi, what) in self._LIMITS.items():
+            v = getattr(self, k, None)
+            if v is not None and not (lo <= v <= hi):
+                bad.append(f"{k} = {v} is outside {lo} to {hi} ({what})")
+        if bad:
+            raise ValueError("; ".join(bad))
+        return self
 
 
 FlowUnit = Literal["kg/s", "kg/h", "Am3/h", "Nm3/h", "Sm3/h", "MMSCFD"]
@@ -26,7 +42,11 @@ class GasComposition(BaseModel):
     backend: Literal["pr", "coolprop"] = "pr"
 
 
-class OperatingCase(BaseModel):
+class OperatingCase(Checked):
+    _LIMITS = {"suction_pressure_bara": (0.05, 1000, "absolute pressure, bara"), "suction_temperature_c": (-200, 400, "deg C"),
+                "discharge_pressure_bara": (0.06, 1500, "absolute pressure, bara"), "flow_value": (1e-6, 1e8, "must be positive"),
+                "polytropic_efficiency": (0.3, 0.98, "fraction, not %")}
+
     name: str = "Rated"
     is_design: bool = False
     suction_pressure_bara: float = 30.0
@@ -38,7 +58,18 @@ class OperatingCase(BaseModel):
     measured_discharge_temperature_c: Optional[float] = Field(None, description="Test/plant data: back-calculate efficiency")
 
 
-class DesignBasis(BaseModel):
+    @model_validator(mode="after")
+    def _pressures(self):
+        if self.discharge_pressure_bara <= self.suction_pressure_bara:
+            raise ValueError(f"discharge pressure {self.discharge_pressure_bara} bara must be above suction pressure {self.suction_pressure_bara} bara")
+        return self
+
+class DesignBasis(Checked):
+    _LIMITS = {"max_tip_speed_m_s": (50, 600, "m/s"), "max_machine_mach": (0.2, 1.6, "-"), "head_coefficient": (0.2, 0.8, "psi"),
+                "first_stage_flow_coefficient": (0.005, 0.2, "phi"), "max_impellers_per_casing": (1, 12, "-"), "mechanical_loss_fraction": (0, 0.2, "fraction"),
+                "driver_rating_margin": (1.0, 2.0, "factor"), "min_operating_speed_pct": (10, 100, "%"), "max_continuous_speed_pct": (90, 130, "%"),
+                "trip_speed_pct": (95, 140, "%"), "speed_rpm_override": (100, 100000, "rpm"), "impeller_diameter_mm_override": (50, 3000, "mm")}
+
     driver_type: Literal["vfd_motor", "fixed_speed_motor_gearbox", "steam_turbine", "gas_turbine"] = "vfd_motor"
     max_tip_speed_m_s: float = 300.0
     max_machine_mach: float = 0.95
@@ -100,7 +131,10 @@ class BearingCoefficients(BaseModel):
     cyy: float = 2e5
 
 
-class BearingDesign(BaseModel):
+class BearingDesign(Checked):
+    _LIMITS = {"length_to_diameter": (0.1, 2.0, "L/D"), "radial_clearance_ratio": (0.0003, 0.006, "Cr / R"), "pads": (2, 12, "-"),
+                "preload": (0.0, 0.9, "m"), "pivot_offset": (0.3, 0.8, "fraction of arc"), "oil_supply_temperature_c": (10, 90, "deg C")}
+
     journal_type: Literal["tilting_pad", "plain_cylindrical", "user"] = "tilting_pad"
     length_to_diameter: float = 0.4
     radial_clearance_ratio: float = Field(0.0018, description="Radial clearance / journal radius")
@@ -126,7 +160,9 @@ class BearingDesign(BaseModel):
     rotor_weight_drawing_kg: Optional[float] = Field(None, description="Rotor weight from the rotor assembly drawing (consistency check)")
 
 
-class SealDesign(BaseModel):
+class SealDesign(Checked):
+    _LIMITS = {"labyrinth_teeth": (1, 60, "-"), "balance_piston_teeth": (1, 80, "-"), "pre_swirl_ratio": (0.0, 1.0, "-")}
+
     shaft_end_seal: Literal["dry_gas_tandem", "dry_gas_double", "oil_film", "labyrinth"] = "dry_gas_tandem"
     labyrinth_teeth: int = 8
     labyrinth_clearance_mm: Optional[float] = Field(None, description="Radial; None = (0.0025 x D + 0.1 mm) / 2")
