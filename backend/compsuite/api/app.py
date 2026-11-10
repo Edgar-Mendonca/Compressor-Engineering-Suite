@@ -573,6 +573,7 @@ def shoptest(req: ShopTestRequest):
         s = cached[-1]["summary"]
         pred = {"Bore": s["permanent_bore_growth_um"], "Eye": s["permanent_eye_growth_um"], "Tip": s["permanent_tip_growth_um"]}
     out["overspeed"] = T.overspeed_record(pred, req.overspeed_measured, req.overspeed_allowable_um)
+    out["trace"] = T.shop_trace(out)
     return jsonable(out)
 
 
