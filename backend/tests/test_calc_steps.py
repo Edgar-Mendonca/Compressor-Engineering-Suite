@@ -51,3 +51,8 @@ def test_theory_and_references():
     refs = c.get("/api/app/references").json()
     assert sum(len(g["items"]) for g in refs) > 30
     assert len(list(THEORY.glob("*.md"))) == len(pages)
+
+
+def test_theory_file_names_work_on_windows():
+    reserved = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(10)), *(f"lpt{i}" for i in range(10))}
+    assert not [f.name for f in THEORY.glob("*.md") if f.stem.lower() in reserved]

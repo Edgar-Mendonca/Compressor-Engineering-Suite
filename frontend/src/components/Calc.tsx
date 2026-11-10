@@ -130,7 +130,7 @@ export function Val({ label, row, children }: { label: string; row?: number; chi
 // ------------------------------------------------------------------ trace panel
 const PAGE: [string, string][] = [["compression", "thermo"], ["aero.cfd", "cfd"], ["aero", "compressor"], ["impeller", "impellers"],
   ["structural.disk", "impellers"], ["structural", "impfea"], ["materials", "materials"], ["mechanical", "rotor"], ["bearings", "bearings"],
-  ["seals", "bearings"], ["rotordynamics", "lateral"], ["torsional", "torsional"], ["auxiliary", "aux"], ["piping", "aux"],
+  ["seals", "bearings"], ["rotordynamics", "lateral"], ["torsional", "torsional"], ["auxiliary", "auxiliary"], ["piping", "auxiliary"],
   ["optimization", "optimize"], ["cfd", "cfd"], ["dynamics", "dynamics"], ["testing.ptc10", "perftest"], ["testing.mrt", "mrt"],
   ["testing.perf", "perftest"], ["testing.mech", "mrt"], ["testing", "shoptest"]];
 export const pageOf = (module: string) => PAGE.find(([p]) => (module ?? "").startsWith(p))?.[1] ?? "";
