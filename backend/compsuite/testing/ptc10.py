@@ -28,6 +28,7 @@ import numpy as np
 from scipy.optimize import brentq
 
 from compsuite.compression.process import polytropic_path
+from compsuite.core.trace import record
 from compsuite.core.units import bar_to_pa, c_to_k, k_to_c
 from compsuite.thermo.backends import make_gas
 
@@ -594,6 +595,9 @@ def ptc10_analysis(project, res: dict, options: dict | None = None, logs: dict |
                          "valves": [{"tag": "A", "name": "Loop balance valve A", "s1": "open", "s2": "closed"},
                                     {"tag": "B", "name": "Loop balance valve B", "s1": "closed", "s2": "open"},
                                     {"tag": "C", "name": "Seal balance valve C", "s1": "closed", "s2": "open"}] if len(secs) > 1 else []})
+    for s_ in sections:
+        if s_.get("selected"):
+            s_["trace"] = _steps(s_, test_type, method)
     stat = [a["status"] for s in sections for a in (s.get("acceptance") or {}).get("checks", [])]
     s0 = next((x for x in sections if x.get("selected")), None)
     scope = (f"Type 2 test on {'/'.join((s0 or {}).get('test_gas') or ['substitute gas'])}: the specified gas cannot be run safely or economically on the "
@@ -606,7 +610,104 @@ def ptc10_analysis(project, res: dict, options: dict | None = None, logs: dict |
             "specified_gas": project.gas.components, "reynolds_correction": bool(o.get("reynolds_correction", True)),
             "sections": sections, "instruments": INSTRUMENTS, "stability": STABILITY, "type1_limits": TYPE1_LIMITS,
             "status": "fail" if "fail" in stat else ("pass" if stat and all(s == "pass" for s in stat) else "review"),
-            "procedure": PROCEDURE(test_type, len(secs))}
+            "procedure": PROCEDURE(test_type, len(secs)), "trace": next((x["trace"] for x in sections if x.get("trace")), None)}
+
+
+SYMS = {"U": ("Impeller tip speed", "m/s"), "D_2": ("Impeller diameter", "m"), "b_2": ("Impeller exit width", "m"), "N": ("Speed", "rpm"),
+        "a_1": ("Speed of sound at inlet", "m/s"), "M_m": ("Machine Mach number", "-"), "Re_m": ("Machine Reynolds number", "-"), r"\rho_1": ("Inlet density", "kg/m³"),
+        r"\rho_2": ("Discharge density", "kg/m³"), r"\mu_1": ("Inlet viscosity", "Pa·s"), r"\varphi": ("Flow coefficient", "-"), "Q_1": ("Inlet volume flow", "m³/s"),
+        "r_v": ("Specific volume ratio inlet / discharge", "-"), "H_p": ("Polytropic head", "J/kg"), r"\dot m": ("Mass flow", "kg/s"), r"\Delta h": ("Enthalpy rise", "J/kg"),
+        "k_m": ("Mechanical loss fraction", "-"), "P_{sh}": ("Shaft power", "kW"), "N_t": ("Test speed", "rpm"), "N_{sp}": ("Specified speed", "rpm"),
+        r"H_{p,t}": ("Test-gas head at matched volume ratio", "J/kg"), r"H_{p,sp}": ("Specified head", "J/kg"), r"Q_{sp}": ("Specified inlet volume flow", "m³/h"),
+        r"Q_t": ("Test inlet volume flow", "m³/h"), "P_1": ("Inlet pressure", "bara"), "P_2": ("Discharge pressure", "bara"), r"\eta_p": ("Polytropic efficiency", "-"),
+        "d": ("Orifice bore", "m"), "D": ("Pipe bore", "m"), r"\beta": ("Diameter ratio d/D", "-"), "C": ("Discharge coefficient", "-"), r"\varepsilon": ("Expansibility factor", "-"),
+        r"\Delta p": ("Orifice differential pressure", "Pa"), "E": ("Velocity of approach factor", "-"), r"\rho_u": ("Upstream density", "kg/m³"),
+        "c": ("Flange gas velocity", "m/s"), "h": ("Enthalpy", "J/kg"), "T_0": ("Total temperature", "K"), "P_0": ("Total pressure", "Pa"), "T": ("Static temperature", "K"),
+        "s": ("Entropy", "J/(kg K)"), "T_{01}": ("Inlet total temperature", "K"), "T_{02}": ("Discharge total temperature", "K"), "s_1": ("Inlet entropy", "J/(kg K)"),
+        "s_2": ("Discharge entropy", "J/(kg K)"), "h_1": ("Inlet total enthalpy", "J/kg"), "h_2": ("Discharge total enthalpy", "J/kg"), "Q_l": ("Casing heat loss", "W"),
+        "w": ("Work input per kg", "J/kg"), "r": ("Speed ratio specified / test", "-"), "f_{Re}": ("Reynolds correction factor", "-"), r"\eta_t": ("Test efficiency", "-"),
+        "u_i": ("Change of the result for one instrument uncertainty", "%"), "u": ("Combined uncertainty (95 %)", "%"), "H_g": ("Head at guarantee flow", "kJ/kg"),
+        "Q_g": ("Guarantee flow", "m³/h"), "P_g": ("Shaft power at guarantee flow", "kW"), "P_{gt}": ("Guarantee shaft power", "kW"), r"\dot m_{imp}": ("Impeller flow incl. balance leakage", "kg/s"),
+        "P_m": ("Mechanical loss", "kW"), "h_c": ("Heat transfer coefficient", "W/(m² K)"), "A_c": ("Casing surface", "m²"), "T_a": ("Ambient temperature", "K")}
+
+
+def _steps(sec: dict, test_type: int, method: str):
+    sp, sel, setup = sec["spec"], sec["selected"], sec["setup"]
+    rec = record("testing.ptc10", f"PTC 10 Type {test_type} test design, data reduction ({method}) and conversion by similarity", [sp["section"], test_type, method],
+                 assumptions=[f"Section {sp['section']}", "Equal flow coefficient and volume ratio; speed from equal head coefficient (Type 2)"])
+    rec.sym(**SYMS)
+    st = rec.step
+    st("Tip speed", r"U = \frac{\pi D_2 N}{60}", {"D_2": (sp["D2"], "m"), "N": (sp["N"], "rpm")}, sp["U_m_s"], "m/s", "U", note="Specified")
+    st("Specified flow coefficient", r"\varphi = \frac{Q_1}{\frac{\pi}{4} D_2^2\,U}", {"Q_1": (sp["qv"], "m³/s"), "D_2": (sp["D2"], "m"), "U": (sp["U_m_s"], "m/s")}, sp["phi"], "", r"\varphi")
+    st("Specified machine Mach", r"M_m = U / a_1", {"U": (sp["U_m_s"], "m/s"), "a_1": (sp["sound_m_s"], "m/s")}, sp["mach"], "", "M_m")
+    st("Specified machine Reynolds", r"Re_m = \frac{U\,b_2\,\rho_1}{\mu_1}", {"U": (sp["U_m_s"], "m/s"), "b_2": (sp["b2"], "m"), r"\rho_1": (sp["rho1"], "kg/m³"),
+       r"\mu_1": (sp["mu_pa_s"], "Pa·s")}, sp["reynolds"], "", "Re_m")
+    st("Specified volume ratio", r"r_v = \rho_2 / \rho_1", {r"\rho_1": (sp["rho1"], "kg/m³")}, sp["rv"], "", "r_v")
+    st("Specified head", r"H_p = \int_{P_1}^{P_2} v\,dP", {"P_1": (sp["P1"] / 1e5, "bara"), "P_2": (sp["P2"] / 1e5, "bara"), r"\eta_p": sp["eta"]}, sp["head"] / 1e3,
+       "kJ/kg", "H_p", note="Integrated on the specified gas in 30 steps")
+    st("Specified shaft power", r"P_{sh} = \dot m\,\Delta h\,(1 + k_m)", {r"\dot m": (sp["m"], "kg/s"), r"\Delta h": (sp["dh"], "J/kg")}, sp["power_kw"], "kW", "P_{sh}")
+    at = lambda k: {"ui": k[0], "row": k[1]}  # noqa: E731
+    if test_type == 2 and not sel.get("user_set"):
+        st("Test speed", r"N_t = N_{sp}\sqrt{H_{p,t}/H_{p,sp}}", {"N_{sp}": (sp["N"], "rpm"), r"H_{p,t}": (sel["head_kj_kg"] * 1e3, "J/kg"), r"H_{p,sp}": (sp["head"], "J/kg")},
+           sel["N_rpm"], "rpm", "N_t", note="Discharge pressure found so the test volume ratio equals the specified one; then equal head coefficient", **at(("Speed rpm", 7)))
+    else:
+        st("Test speed", "N_t", {}, sel["N_rpm"], "rpm", "N_t", note="Set by the user or the Type 1 test", **at(("Speed rpm", 7)))
+    st("Test inlet flow", r"Q_t = Q_{sp}\,N_t / N_{sp}", {r"Q_{sp}": (sp["qv"] * 3600, "m³/h"), "N_t": (sel["N_rpm"], "rpm"), "N_{sp}": (sp["N"], "rpm")}, sel["qv_m3_h"], "m³/h", "Q_t",
+       **at(("Inlet flow m³/h", 2)))
+    st("Test head", r"H_{p,t} = \int_{P_1}^{P_2} v\,dP", {"P_1": (sel["P1_bara"], "bara"), "P_2": (sel["P2_bara"], "bara")}, sel["head_kj_kg"], "kJ/kg", r"H_{p,t}", **at(("Head kJ/kg", 5)))
+    st("Test machine Mach", r"M_m = U / a_1", {"U": (sel["U_m_s"], "m/s"), "a_1": (sel["sound_m_s"], "m/s")}, sel["mach"], "", "M_m", **at(("Machine Mach", 8)))
+    st("Test machine Reynolds", r"Re_m = \frac{U\,b_2\,\rho_1}{\mu_1}", {"U": (sel["U_m_s"], "m/s"), "b_2": (sp["b2"], "m"), r"\rho_1": (sel["rho1"], "kg/m³"),
+       r"\mu_1": (sel["mu_pa_s"], "Pa·s")}, sel["reynolds"], "", "Re_m", **at(("Machine Reynolds", 9)))
+    st("Test flow coefficient", r"\varphi = \frac{Q_1}{\frac{\pi}{4} D_2^2\,U}", {"Q_1": (sel["qv_m3_h"] / 3600, "m³/s"), "D_2": (sp["D2"], "m"), "U": (sel["U_m_s"], "m/s")},
+       sel["phi"], "", r"\varphi", **at(("Flow coefficient", 10)))
+    st("Test volume ratio", r"r_v = \rho_2 / \rho_1", {r"\rho_1": (sel["rho1"], "kg/m³")}, sel["rv"], "", "r_v", **at(("Volume ratio", 11)))
+    for i, c in enumerate(sel.get("checks") or []):
+        if isinstance(c["value"], (int, float)):
+            st(c["check"], c["check"], {}, c["value"], "", row=i, note=f"Limit {c['limit']}", ui="Value")
+    st("Orifice bore", r"\beta = d / D", {"D": (setup["orifice_D_m"], "m")}, setup["orifice_d_m"], "m", "d", note="Sized for about 25 kPa differential at the test flow")
+    lines = sec.get("lines") or []
+    ln = min(lines, key=lambda l: abs(l["speed_frac"] - 1.0)) if lines else None
+    ok = [r for r in (ln or {}).get("results", []) if r.get("test")]
+    if ok:
+        r0 = ok[0]
+        t, cv, o_ = r0["test"], r0["converted"], r0["test"].get("orifice")
+        if o_:
+            st("Orifice mass flow", r"\dot m = C\,E\,\varepsilon\,\frac{\pi}{4}d^2\sqrt{2\,\Delta p\,\rho_u},\quad E = (1 - \beta^4)^{-1/2}",
+               {"C": o_["C"], "E": o_["E"], r"\varepsilon": o_["eps"], "d": (setup["orifice_d_m"], "m"), r"\Delta p": (o_["dp"], "Pa"), r"\rho_u": (o_["rho"], "kg/m³"),
+                r"\beta": o_["beta"]}, o_["m"], "kg/s", r"\dot m", note=f"Point {r0['point']}: C from the Reader-Harris/Gallagher equation, 6 iterations on Re_D")
+        st("Inlet total temperature", r"h(T_0, P_0) = h(T, P) + c^2/2,\quad P_0 = P + \rho c^2/2", {"c": (t["c1_m_s"], "m/s")}, t["T01_c"], "°C", "T_0",
+           note="Static flange readings converted to total conditions")
+        if method == "sandberg_colby":
+            st("Polytropic head (test)", r"H_p = (h_2 - h_1) - (s_2 - s_1)\,\frac{T_{02} - T_{01}}{\ln(T_{02}/T_{01})}", {"h_1": (t["h1"], "J/kg"), "h_2": (t["h2"], "J/kg"),
+               "s_1": (t["s1"], "J/(kg K)"), "s_2": (t["s2"], "J/(kg K)"), "T_{01}": (t["T01_c"] + 273.15, "K"), "T_{02}": (t["T02_c"] + 273.15, "K")},
+               t["head_kj_kg"], "kJ/kg", "H_p", row=0, ui="Hp test")
+        else:
+            st("Polytropic head (test)", r"H_p = \int v\,dP", {}, t["head_kj_kg"], "kJ/kg", "H_p", row=0, ui="Hp test", note=f"Method {method}")
+        st("Casing heat loss", r"Q_l = h_c\,A_c\,(\bar T_0 - T_a)", {"h_c": (9.0, "W/(m² K)")}, t["heat_loss_kw"], "kW", "Q_l",
+           note="Natural convection and radiation from a bare casing" if t["heat_loss_estimated"] else "Entered value")
+        st("Work input", r"w = (h_2 - h_1) + Q_l / \dot m", {"h_1": (t["h1"], "J/kg"), "h_2": (t["h2"], "J/kg"), "Q_l": (t["heat_loss_kw"] * 1e3, "W"),
+           r"\dot m": (t["m_kg_s"], "kg/s")}, t["work_kj_kg"], "kJ/kg", "w")
+        st("Test efficiency", r"\eta_t = H_p / w", {"H_p": (t["head_kj_kg"] * 1e3, "J/kg"), "w": (t["work_kj_kg"] * 1e3, "J/kg")}, t["eta_p"] * 100, "%", r"\eta_t", row=0, ui="η test %")
+        for i, r in enumerate(ok):
+            t, cv = r["test"], r["converted"]
+            rr = cv["n_rpm"] / t["n_rpm"]
+            st("Test inlet volume flow", r"Q_1 = \dot m_{imp} / \rho_1", {r"\dot m_{imp}": (t["m_imp_kg_s"], "kg/s"), r"\rho_1": (t["rho1"], "kg/m³")}, t["qv_m3_h"], "m³/h", "Q_1",
+               row=i, ui="q test m³/h")
+            st("Converted inlet flow", r"Q_{sp} = Q_t\,r,\quad r = N_{sp}/N_t", {r"Q_t": (t["qv_m3_h"], "m³/h"), "r": rr}, cv["qv_m3_h"], "m³/h", r"Q_{sp}", row=i,
+               ui="q conv m³/h", note="Divided by (1 + balance leakage) for the through-flow")
+            st("Converted head", r"H_{p,sp} = H_{p,t}\,r^2", {r"H_{p,t}": (t["head_kj_kg"] * 1e3, "J/kg"), "r": rr}, cv["head_kj_kg"], "kJ/kg", r"H_{p,sp}", row=i, ui="Hp conv kJ/kg")
+            st("Converted efficiency", r"\eta_p = 1 - (1 - \eta_t)\,f_{Re}", {r"\eta_t": t["eta_p"], "f_{Re}": cv["re_factor"]}, cv["eta_p"] * 100, "%", r"\eta_p", row=i)
+            st("Converted discharge pressure", r"H_p(P_2) = H_{p,sp}", {r"H_{p,sp}": (cv["head_kj_kg"] * 1e3, "J/kg"), r"\eta_p": cv["eta_p"]}, cv["P2_bara"], "bara", "P_2", row=i,
+               ui="p2 conv bara", note="P2 solved on the specified gas so the polytropic head matches")
+            st("Converted shaft power", r"P_{sh} = \dot m\,\Delta h + P_m\,(N/N_{sp})^{2.5}", {r"\dot m": (cv["m_kg_s"], "kg/s"), "P_m": (cv["mech_loss_kw"], "kW")},
+               cv["shaft_power_kw"], "kW", "P_{sh}", row=i, ui="Power kW")
+            st("Head uncertainty", r"u = \sqrt{\sum u_i^2}", {}, r["uncertainty_pct"]["head_kj_kg"], "%", "u", row=i, ui="U(Hp)",
+               note="Each instrument moved by its 95 % uncertainty and the point reduced again; method uncertainty added")
+    acc = sec.get("acceptance") or {}
+    for i, c in enumerate(acc.get("checks", [])):
+        st(c["check"], r"\text{interpolated at } Q_g", {"Q_g": (sp["qv"] * 3600, "m³/h")}, c["test"], "", row=i, ui="Test",
+           note=f"Converted test points interpolated linearly in flow; guarantee {c['guarantee']:.1f}, deviation {c['deviation_pct']:.2f} %")
+    return rec
 
 
 def acceptance(sp: dict, lines: list, adj: float, o: dict) -> dict:

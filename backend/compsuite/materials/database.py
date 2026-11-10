@@ -84,6 +84,18 @@ def screen_materials(use: str, max_temp_c: float, min_temp_c: float, ph2s_bar: f
                      "checks": checks, "suitable": all(checks.values()), "score": score,
                      "sour_note": m["sour_note"], "corrosion": m["corrosion"]})
     rows.sort(key=lambda r: (not r["suitable"], -r["score"]))
+    rec.sym(**{"p_{H_2S}": ("H2S partial pressure", "bar"), "p_{sour}": ("Sour-service threshold", "bar"), "S_y": ("Yield strength at room temperature", "MPa"),
+               "S_y(T)": ("Yield strength at the hottest temperature", "MPa"), "f_y(T)": ("Yield derating factor at temperature", "-"),
+               "S_{y,use}": ("Usable yield strength", "MPa"), "T_{max}": ("Highest metal temperature", "°C")})
+    rec.step("Sour service", r"p_{H_2S} \ge p_{sour}", {"p_{H_2S}": (ph2s_bar, "bar"), "p_{sour}": (SOUR_PH2S_BAR, "bar")}, "yes" if sour else "no")
+    for i, r in enumerate(rows):
+        m = get_material(r["key"])
+        cap = sour and m["family"] in ("low_alloy", "carbon_steel")
+        fy = at_temperature(r["key"], max_temp_c)["yield_mpa"] / m["yield_mpa"]
+        f = r"S_{y,use} = \min\big(S_y(T),\ 550\,f_y(T)\big),\quad S_y(T) = f_y(T)\,S_y" if cap else r"S_{y,use} = S_y(T) = f_y(T)\,S_y"
+        rec.step(f"Usable yield of {r['key']}", f, {"S_y": (m["yield_mpa"], "MPa"), "f_y(T)": fy, "T_{max}": (max_temp_c, "°C")},
+                 r["usable_yield_mpa"], "MPa", "S_{y,use}", i, note="Derating factor interpolated in the table for the material family"
+                 + ("; sour-service hardness limit caps the strength" if cap else ""))
     if wet:
         rec.warn("Wet service: confirm corrosion rates and allowances in the project material records")
     return {"use": use, "sour": sour, "candidates": rows, "trace": rec}

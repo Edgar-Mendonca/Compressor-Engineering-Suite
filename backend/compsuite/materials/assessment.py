@@ -497,7 +497,42 @@ def material_assessment(gas, sizing: dict, project, impellers: list[dict] | None
                   wet_locations=sum(1 for r in rows if r["wet"] and not r["sop"]), sour=any(r["sour"] for r in rows),
                   mdmt_fail=sum(1 for s in selection if not s["mdmt_ok"]))
     criteria = [c.model_dump() for c in ma.acceptance_criteria]
+    _steps(rec, rows, ma, sop)
     return {"conditions": rows, "charts": {"dew_point": dew_chart(rows, ma.dew_margin_c), "ssc": ssc_chart(rows, ma.ssc_domains)},
             "criteria": criteria, "blade_thickness_mm": blade_t, "blade_thickness_basis": blade_basis, "design_life_years": life,
             "mdmt_c": ma.mdmt_c, "shaft_mdmt_c": ma.shaft_mdmt_c, "components": components, "selection": selection,
             "weld_overlay": overlay, "sop": sop, "contaminants": contaminants, "counts": counts, "trace": rec}
+
+
+def _steps(rec, rows: list[dict], ma, sop: dict) -> None:
+    rec.sym(**{"P": ("Pressure at the location", "bara"), "y_{H_2S}": ("H2S mole fraction", "-"), "y_{CO_2}": ("CO2 mole fraction", "-"),
+               "y_w": ("Water mole fraction", "-"), "p_{H_2S}": ("H2S partial pressure", "bar"), "p_{CO_2}": ("CO2 partial pressure", "bar"),
+               "p_w": ("Water partial pressure", "bar"), "p_{sat}": ("Vapour pressure of pure water", "bar"), "T": ("Gas temperature", "°C"),
+               "T_{dew}": ("Water dew point", "°C"), r"\Delta T_m": ("Dew-point margin", "K"), "[H^+]": ("Hydrogen ion concentration", "mol/L"),
+               "K_1": ("First dissociation constant", "mol/L"), "K_H": ("Henry constant", "mol/(L bar)"), "pH": ("Condensed-water pH", "-"),
+               "CR": ("Corrosion rate", "mm/y"), "F": ("Corrosion calibration factor", "-"), "f_{O_2}": ("Oxygen multiplier", "-"),
+               "L": ("Design life", "years"), "f_{SOP}": ("Share of life at settle-out", "-"), r"\delta": ("Metal loss over the life", "mm"),
+               "T_{trip}": ("Depressurisation trip setpoint", "°C"), r"\Delta T_{tt}": ("Trip margin above the dew point", "K"),
+               "p_{sour}": ("Sour-service threshold", "bar")})
+    life = ma.service_life_years
+    for i, r in enumerate(rows):
+        P, T = r["P_bara"], r["T_c"]
+        rec.step("H2S partial pressure", r"p_{H_2S} = P\,y_{H_2S}", {"P": (P, "bara"), "y_{H_2S}": r["h2s_pct"] / 100}, r["ph2s_bar"], "bar", "p_{H_2S}", i, ui="pH₂S bar")
+        rec.step("CO2 partial pressure", r"p_{CO_2} = P\,y_{CO_2}", {"P": (P, "bara"), "y_{CO_2}": r["co2_pct"] / 100}, r["pco2_bar"], "bar", "p_{CO_2}", i, ui="pCO₂ bar")
+        rec.step("Water dew point", r"p_{sat}(T_{dew}) = p_w = P\,y_w", {"P": (P, "bara"), "y_w": r["h2o_pct"] / 100}, r["water_dew_point_c"], "°C", "T_{dew}", i,
+                 note="Solved by root search on the pure-water vapour pressure curve", ui="Dew °C")
+        rec.step("Moisture", r"\text{wet if } T \le T_{dew} + \Delta T_m", {"T": (T, "°C"), "T_{dew}": (r["water_dew_point_c"], "°C"), r"\Delta T_m": (ma.dew_margin_c, "K")},
+                 r["moisture"], "", "", i, note="Always wet when liquid water is assumed" if ma.liquid_water_assumed else "")
+        rec.step("Condensed water pH", r"pH = -\log_{10}\sqrt{K_{1}K_{H}\,p_{CO_2} + K_{1}K_{H}\,p_{H_2S}}", {"p_{CO_2}": (r["pco2_bar"], "bar"),
+                 "p_{H_2S}": (r["ph2s_bar"], "bar"), "T": (T, "°C")}, r["ph"], "", "pH", i, ui="pH",
+                 note="Pure water saturated with CO2 and H2S, constants corrected to temperature" if r["ph_basis"].startswith("estimated") else f"pH {r['ph_basis']}")
+        rec.step("SSC severity domain", r"\text{domain}(p_{H_2S},\ pH)", {"p_{H_2S}": (r["ph2s_bar"], "bar"), "pH": r["ph"], "p_{sour}": (ma.ssc_domains.sour_threshold_bar, "bar")},
+                 r["domain"] if r["sour"] else "Non-sour", "", "", i, ui="Severity", note="Read from the editable domain boundaries, straight lines in log pH2S")
+        rec.step("Corrosion rate", r"CR = 10^{\,5.8 - 1710/T + 0.67\log_{10} p_{CO_2}}\;F\,f_{O_2}", {"T": (T + 273.15, "K"), "p_{CO_2}": (r["pco2_bar"], "bar"),
+                 "F": ma.corrosion_factor, "f_{O_2}": r["o2_factor"]}, r["cr_mm_y"], "mm/y", "CR", i, ui="CR mm/y",
+                 note="Carbon steel in CO2 water; zero when the location is dry" + ("; rate entered by the user" if r["source"] == "override" else ""))
+        rec.step("Metal loss over the life", r"\delta = CR\,L" + (r"\,f_{SOP}" if r["sop"] else ""), {"CR": (r["cr_mm_y"], "mm/y"), "L": (life, "years"),
+                 **({"f_{SOP}": ma.sop_exposure_fraction} if r["sop"] else {})}, r["cumulative_loss_mm"], "mm", r"\delta", i, ui=f"Loss {life:g} y mm")
+    if sop["trip_setpoint_c"] is not None:
+        rec.step("SOP trip setpoint", r"T_{trip} = T_{dew} + \Delta T_{tt}", {"T_{dew}": (sop["dew_point_c"], "°C"), r"\Delta T_{tt}": (ma.sop.tt_margin_c, "K")},
+                 sop["trip_setpoint_c"], "°C", "T_{trip}", note=f"Dew point of the settle-out gas at {sop['pressure_bara']:.1f} bara")

@@ -75,7 +75,8 @@ def rotating_disk(r: np.ndarray, t: np.ndarray, E: float, nu: float, rho: float,
     avg_t = np.trapezoid(st * t, r) / area
     return {"r_m": r.tolist(), "t_m": t.tolist(), "u_m": u.tolist(), "sigma_r_pa": sr.tolist(), "sigma_t_pa": st.tolist(),
             "von_mises_pa": vm.tolist(), "max_von_mises_pa": float(vm.max()), "average_tangential_pa": float(avg_t),
-            "bore_growth_m": float(u[0]), "tip_growth_m": float(u[-1])}
+            "bore_growth_m": float(u[0]), "tip_growth_m": float(u[-1]),
+            "residual": float(np.linalg.norm(K @ u - F) / max(np.linalg.norm(F), 1e-30))}
 
 
 def impeller_disk_model(imp: dict, mat: dict, omega: float, T_gas_c: float, bore_dT: float = 20.0, n: int = 60) -> dict:
@@ -121,4 +122,45 @@ def impeller_stress(impellers: list[dict], stages: list[dict], mat: dict, speeds
                     "overspeed_average_ratio": avg_ratio, "avg_tangential_overspeed_mpa": res_os["average_tangential_pa"] / 1e6,
                     "burst_speed_rpm": burst * 30 / math.pi, "burst_margin": burst / w_mcs,
                     "tip_growth_um": res_mcs["tip_growth_m"] * 1e6})
+        _steps(rec, len(out) - 1, out[-1], g, res_mcs, res_os, res_mech, mat, w_mcs, burst)
+    if impellers:
+        rec.step("Tip speed at MCS", r"U_2 = \omega_{mcs}\,D_2/2", {r"\omega_{mcs}": (w_mcs, "rad/s"), "D_2": (impellers[0]["D2_mm"] / 1e3, "m")},
+                 w_mcs * impellers[0]["D2_mm"] / 2e3, "m/s", "U_2", note=f"Impeller {impellers[0]['index'] + 1}; MCS = {speeds['mcs_rpm']:.0f} rpm")
     return {"impellers": out, "trace": rec}
+
+
+def _steps(rec, row, o, g, mcs, os_, mech, mat, w, burst):
+    rec.sym(**{r"\sigma_r": ("Radial stress", "Pa"), r"\sigma_\theta": ("Tangential (hoop) stress", "Pa"), "u": ("Radial displacement", "m"),
+               "r": ("Radius", "m"), "t": ("Disk thickness", "m"), r"\rho": ("Material density", "kg/m³"), r"\omega": ("Angular speed", "rad/s"),
+               r"\omega_{mcs}": ("Angular speed at MCS", "rad/s"), "D_2": ("Impeller tip diameter", "m"), "U_2": ("Tip speed", "m/s"),
+               "b": ("Body-load factor (shroud and blades outboard of the eye)", "-"), "E": ("Young's modulus", "Pa"), r"\nu": ("Poisson ratio", "-"),
+               r"\alpha": ("Thermal expansion coefficient", "1/K"), r"\Delta T": ("Temperature rise above 20 °C", "K"), "n_e": ("Number of elements", "-"),
+               r"\varepsilon": ("Relative residual |Ku − F|/|F|", "-"), r"\sigma_{vm}": ("von Mises stress", "Pa"), r"\bar\sigma_\theta": ("Average tangential stress", "Pa"),
+               "S_y": ("Yield strength at temperature", "Pa"), "S_u": ("Tensile strength at temperature", "Pa"), r"\omega_b": ("Burst speed", "rad/s"),
+               r"\bar\sigma_{\theta,m}": ("Average tangential stress at MCS, no thermal load", "Pa"), "BM": ("Burst margin", "-"),
+               "R_y": ("Average stress over 0.9 S_y", "-"), "N_b": ("Burst speed", "rpm"), "r_i": ("Bore radius", "m"), "r_o": ("Tip radius", "m"),
+               "u_o": ("Radial growth at the tip", "m"), "t_{hub}": ("Hub thickness", "m"), "t_{tip}": ("Tip thickness", "m")})
+    r, t = g["r"], g["t"]
+    if row == 0:
+        rec.step("Disk equilibrium", r"\frac{d}{dr}(t\,r\,\sigma_r) - t\,\sigma_\theta + b\,\rho\,\omega^2 r^2 t = 0",
+                 {r"\rho": (mat["density_kg_m3"], "kg/m³"), "E": (mat["E_pa"], "Pa"), r"\nu": mat["poisson"], r"\alpha": (mat["expansion_um_mk"] * 1e-6, "1/K"),
+                  "b": PARASITIC_FACTOR}, "", "", "",
+                 note="Solved for the radial displacement u(r) with linear elements, two Gauss points each, and one direct linear solve")
+    rec.step("Mesh", r"n_e = n - 1", {"r_i": (float(r[0]), "m"), "r_o": (float(r[-1]), "m"), "t_{hub}": (float(t[0]), "m"), "t_{tip}": (float(t[-1]), "m")},
+             len(r) - 1, "elements", "n_e", row, note="Equal radial steps; thickness tapers from hub to tip; 20 K cooler at the bore than at the tip")
+    rec.step("Solution residual", r"\varepsilon = \lVert K u - F \rVert / \lVert F \rVert", {}, mcs["residual"], "", r"\varepsilon", row,
+             note="Direct solve, no iteration; a tiny residual means the force balance is met")
+    sy, su = mat["yield_mpa"] * 1e6, mat["uts_mpa"] * 1e6
+    rec.step("Peak von Mises stress at MCS", r"\sigma_{vm} = \max_r \sqrt{\sigma_r^2 - \sigma_r\sigma_\theta + \sigma_\theta^2}", {r"\omega": (w, "rad/s")},
+             o["max_vm_mcs_mpa"], "MPa", r"\sigma_{vm}", row, note="Spin plus thermal load", ui="σvm MCS MPa")
+    rec.step("Peak von Mises stress at overspeed", r"\sigma_{vm} = \max_r \sqrt{\sigma_r^2 - \sigma_r\sigma_\theta + \sigma_\theta^2}", {r"\omega": (1.15 * w, "rad/s")},
+             o["max_vm_overspeed_mpa"], "MPa", r"\sigma_{vm}", row, ui="σvm 115 % MPa")
+    rec.step("Average hoop stress at overspeed", r"\bar\sigma_\theta = \frac{\int \sigma_\theta\,t\,dr}{\int t\,dr}", {r"\omega": (1.15 * w, "rad/s")},
+             o["avg_tangential_overspeed_mpa"], "MPa", r"\bar\sigma_\theta", row, ui="σθ avg 115 % MPa")
+    rec.step("Average stress over allowed", r"R_y = \frac{\bar\sigma_\theta}{0.9\,S_y}", {r"\bar\sigma_\theta": (os_["average_tangential_pa"], "Pa"), "S_y": (sy, "Pa")},
+             o["overspeed_average_ratio"], "", "R_y", row, note="1 or less passes", ui="avg / 0.9 Sy")
+    rec.step("Burst speed", r"\omega_b = \omega_{mcs}\sqrt{\frac{0.9\,S_u}{\bar\sigma_{\theta,m}}}", {r"\omega_{mcs}": (w, "rad/s"), "S_u": (su, "Pa"),
+             r"\bar\sigma_{\theta,m}": (mech["average_tangential_pa"], "Pa")}, o["burst_speed_rpm"], "rpm", r"\omega_b", row,
+             note="Spin stress grows with speed squared; burst when the average hoop stress reaches 0.9 of the tensile strength", ui="Burst rpm")
+    rec.step("Burst margin", r"BM = \omega_b / \omega_{mcs}", {r"\omega_b": (burst, "rad/s"), r"\omega_{mcs}": (w, "rad/s")}, o["burst_margin"], "", "BM", row)
+    rec.step("Tip radial growth", "u_o = u(r_o)", {"r_o": (float(r[-1]), "m")}, o["tip_growth_um"], "µm", "u_o", row, ui="Tip growth µm")

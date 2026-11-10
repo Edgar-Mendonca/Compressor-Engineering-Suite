@@ -20,6 +20,7 @@ import math
 
 import numpy as np
 
+from compsuite.core.trace import record
 from compsuite.rotordynamics import fe
 from compsuite.rotordynamics.lateral import required_separation
 from compsuite.testing.tags import GLOSSARY, tag_names, tag_table
@@ -498,7 +499,83 @@ def mrt_analysis(project, res: dict, casing: int = 0, log: list[dict] | None = N
         "Coast down recording Bode / polar plots; then the URT (trial unbalance at the coupling) if specified.",
         "After the test: assembled gas leak test with helium, then remove and inspect bearings and seals.",
     ]
+    out["trace"] = _steps(project, out, pred, sp, ctx, o)
     return out
+
+
+def _steps(project, out: dict, pred: dict, sp: dict, ctx, o: dict):
+    rec = record("testing.mrt", "Mechanical running test plan, predicted probe response (rotor FE model) and API 617 acceptance",
+                 [sp, o], assumptions=["Predicted response to the allowable residual unbalance: sum at the rotor centre of mass, half of each plane's value at the bearings",
+                                       "Unfiltered reading = 1X response with runout and a small non-synchronous part added in quadrature"])
+    mcs, lim = sp["mcs_rpm"], out["limit_um"]
+    loads = ctx[0].static_bearing_loads()
+    rec.sym(**{"A_{vl}": ("Vibration limit", "µm pk-pk"), "N_{mc}": ("Maximum continuous speed", "rpm"), "N_{min}": ("Minimum operating speed", "rpm"),
+               "N_{tr}": ("Trip speed", "rpm"), "A_{ro}": ("Allowable runout", "µm"), "U": ("Allowable residual unbalance per plane", "g·mm"),
+               "W": ("Journal static load as mass", "kg"), "A_{1X}": ("Predicted 1X response", "µm pk-pk"), "r_o": ("Mechanical and electrical runout", "µm"),
+               "A_u": ("Predicted unfiltered reading", "µm pk-pk"), "N_c": ("Critical speed (response peak)", "rpm"), "N_1": ("Lower half-power speed", "rpm"),
+               "N_2": ("Upper half-power speed", "rpm"), "AF": ("Amplification factor", "-"), "SM": ("Actual separation margin", "%"),
+               "SM_{req}": ("Required separation margin", "%"), r"\Delta A": ("Increase in reading from MCS to trip", "µm"), "t_i": ("Duration of plan segment i", "min"),
+               "T_b": ("Bearing metal temperature", "°C"), "T_{oil}": ("Oil supply temperature", "°C"), "T_{des}": ("Design oil supply temperature", "°C"),
+               "T_{tab}": ("Bearing table metal temperature at the speed", "°C"), "U_r": ("Allowable residual unbalance, coupling-end journal", "g·mm"),
+               "W_1": ("Coupling-end journal load as mass", "kg"), "k_U": ("Trial multiple of Ur", "-"), "U_t": ("Trial unbalance", "g·mm"),
+               "R": ("Trial weight radius", "mm"), "m_t": ("Trial mass", "g"), "p_0": ("First leak-test pressure reading", "barg"),
+               "p_{low}": ("Lowest leak-test pressure reading", "barg"), "p_t": ("Leak-test pressure", "barg"), r"\Delta p": ("Pressure drop", "%"),
+               "n_s": ("Number of speeds in the response sweep", "-")})
+    st = rec.step
+    st("Vibration limit", r"A_{vl} = \min\!\left(25.4,\ 25.4\sqrt{12000/N_{mc}}\right)", {"N_{mc}": (mcs, "rpm")}, lim, "µm pk-pk", "A_{vl}")
+    st("Runout limit", r"A_{ro} = \max(6.35,\ 0.25\,A_{vl})", {"A_{vl}": (lim, "µm")}, out["runout_limit_um"], "µm", "A_{ro}")
+    for i, (b, u) in enumerate(zip(pred["bearing_labels"], pred["residual_unbalance_g_mm"])):
+        st("Residual unbalance per plane", r"U = \frac{6350\,W}{N_{mc}}", {"W": (abs(loads[b]) / G0, "kg"), "N_{mc}": (mcs, "rpm")}, u, "g·mm", "U", row=i, note=b)
+    st("Predicted response sweep", r"\mathbf{M}\ddot{\mathbf{q}} + (\mathbf{C} + \Omega\mathbf{G})\dot{\mathbf{q}} + \mathbf{K}\mathbf{q} = \mathbf{F}\,e^{i\Omega t}",
+       {"n_s": len(pred["speeds_rpm"]), "N_{tr}": (sp["trip_rpm"], "rpm")}, len(pred["speeds_rpm"]), "speeds",
+       note="Rotor FE model of the lateral analysis, swept from 200 rpm to 1.04 × trip speed")
+    rec.sym(**{r"\mathbf{M}": ("Mass matrix", "-"), r"\mathbf{C}": ("Damping matrix", "-"), r"\mathbf{G}": ("Gyroscopic matrix", "-"),
+               r"\mathbf{K}": ("Stiffness matrix", "-"), r"\mathbf{q}": ("Nodal displacements", "m"), r"\mathbf{F}": ("Unbalance forces", "N"), r"\Omega": ("Shaft speed", "rad/s")})
+    for i, c in enumerate(pred["critical_speeds"]):
+        st("Predicted critical speed", r"N_c = \arg\max A_{1X}(N)", {}, c["speed_rpm"], "rpm", "N_c", row=i, note=f"Peak at probe {c['probe']}",
+           ui=["Speed rpm", "1st critical (predicted)"] if i == 0 else "Speed rpm")
+        if math.isfinite(c["af"]):
+            st("Amplification factor", r"AF = \frac{N_c}{N_2 - N_1}", {"N_c": (c["speed_rpm"], "rpm")}, c["af"], "", "AF", row=i,
+               note="Half-power points (peak / √2) of the predicted response", ui="AF")
+        below = c["speed_rpm"] < sp["min_rpm"]
+        st("Separation margin", r"SM = 100\,\frac{N_{min} - N_c}{N_{min}}" if below else r"SM = 100\,\frac{N_c - N_{mc}}{N_{mc}}",
+           {"N_{min}" if below else "N_{mc}": (sp["min_rpm"] if below else mcs, "rpm"), "N_c": (c["speed_rpm"], "rpm")}, c["sm_actual_pct"], "%", "SM", row=i, ui="SM actual %")
+        if not below and c["speed_rpm"] <= mcs and c["sm_required_pct"] is not None:
+            st("Required separation margin", r"N_{min} \le N_c \le N_{mc}", {"AF": c["af"]}, c["sm_required_pct"], "%", "SM_{req}", row=i, ui="SM required %",
+               note="Critical inside the operating speed range: no margin can be met (99 % marks this)")
+        elif c["sm_required_pct"] is not None:
+            st("Required separation margin", r"SM_{req} = \min\!\left(16,\ 17\left(1 - \frac{1}{AF - 1.5}\right)\right)" if below else
+               r"SM_{req} = \min\!\left(26,\ 10 + 17\left(1 - \frac{1}{AF - 1.5}\right)\right)", {"AF": c["af"]}, c["sm_required_pct"], "%", "SM_{req}", row=i,
+               ui="SM required %")
+    acc = {a["check"]: (i, a) for i, a in enumerate(out["acceptance"])}
+    pv = pred["probes"]["V1-X"]
+    st("Predicted unfiltered reading", r"A_u = \sqrt{A_{1X}^2 + r_o^2 + (0.04\,A_{1X} + 0.3)^2}", {"A_{1X}": (pv["amp_1x_um"][-1], "µm"), "r_o": (pred["runout_um"], "µm")},
+       pv["unfiltered_um"][-1], "µm pk-pk", "A_u", note="Shown for V1-X at the top of the sweep; the same at every probe and speed")
+    for key, name, f, g, unit in (("Shaft vibration, unfiltered, MSS-MCS", "Largest predicted vibration, MSS to MCS", r"\max_{N_{min} \le N \le N_{mc}} A_u", {"N_{min}": (sp["min_rpm"], "rpm"), "N_{mc}": (mcs, "rpm")}, "µm pk-pk"),
+                            ("Increase MCS -> trip", "Predicted increase from MCS to trip", r"\Delta A = \max_{N_{mc} \le N \le N_{tr}} A_u - A_u(N_{mc})", {"N_{tr}": (sp["trip_rpm"], "rpm")}, "µm"),
+                            ("Bearing metal temperature", "Highest predicted bearing metal temperature", r"T_b = T_{tab}(N) + (T_{oil} - T_{des})",
+                             {"T_{oil}": (out["oil"]["t"]["max"], "°C"), "T_{des}": (project.bearings.oil_supply_temperature_c, "°C")}, "°C"),
+                            ("4 h run at MCS", "Planned time at MCS", r"\sum t_i\ (N = N_{mc})", {"N_{mc}": (mcs, "rpm")}, "min")):
+        if key in acc:
+            i, a = acc[key]
+            st(name, f, g, a["predicted"], unit, row=i, ui="Predicted", note=f"Acceptance row: {key}")
+    st("Test duration", r"\sum t_i", {}, out["plan"]["duration_min"], "min", note="Sum of all plan segments, coast-down included")
+    u = out["urt"]
+    st("URT allowable residual unbalance", r"U_r = \frac{6350\,W_1}{N_{mc}}", {"W_1": (u["journal_load_kg"], "kg"), "N_{mc}": (mcs, "rpm")}, u["ur_g_mm"], "g·mm", "U_r",
+       ui="Ur, coupling-end journal")
+    st("URT trial unbalance", r"U_t = k_U\,U_r,\quad m_t = U_t / R", {"k_U": u["multiple"], "U_r": (u["ur_g_mm"], "g·mm"), "R": (u["radius_mm"], "mm")},
+       u["trial_g_mm"], "g·mm", "U_t", note=f"Trial mass {u['trial_mass_g']:.2f} g at the coupling", ui="Selected trial")
+    st("URT trial range", r"2\,U_r \le U_t \le 8\,U_r", {"U_r": (u["ur_g_mm"], "g·mm")}, f"{u['range_g_mm'][0]:.0f}–{u['range_g_mm'][1]:.0f}", "g·mm",
+       ui="Allowed trial range 2–8 × Ur")
+    st("URT predicted critical", r"N_c = \arg\max A_{1X}(N)", {"U_t": (u["trial_g_mm"], "g·mm")}, u["predicted_critical_rpm"], "rpm", "N_c",
+       note="Response to the trial unbalance alone at the coupling", ui="Predicted critical with trial")
+    lk = out["leak"]
+    filled = [r for r in lk["readings"] if r.get("pressure_barg") not in (None, "")]
+    if filled:
+        p0, pl = float(filled[0]["pressure_barg"]), min(float(r["pressure_barg"]) for r in filled)
+        st("Leak-test pressure drop", r"\Delta p = 100\,\frac{p_0 - p_{low}}{p_t}", {"p_0": (p0, "barg"), "p_{low}": (pl, "barg"), "p_t": (lk["test_pressure_barg"], "barg")},
+           (p0 - pl) / lk["test_pressure_barg"] * 100, "%", r"\Delta p")
+    return rec
 
 
 # ---------------------------------------------------------------- PDF report

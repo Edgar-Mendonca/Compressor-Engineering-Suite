@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Trace } from "./common";
 import { fmt, type Json } from "../api";
 import { LiveChart } from "../components/LiveChart";
 import { Plot, SERIES } from "../components/Plot";
@@ -516,6 +517,7 @@ export function MechRunTestPage(c: Ctx) {
           <input className="inp" style={{ width: "100%" }} placeholder="finding / remark" value={opt.inspection_notes?.[q.key] ?? ""}
             onChange={(e) => setO({ inspection_notes: { ...(opt.inspection_notes ?? {}), [q.key]: e.target.value } })} /></label>)}</div>
       </div>}
+      {d?.trace && <Trace trace={d.trace} />}
     </>
   );
 }

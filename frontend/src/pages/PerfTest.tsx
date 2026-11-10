@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Trace } from "./common";
 import { fmt, type Json } from "../api";
 import { LiveChart, type Series } from "../components/LiveChart";
 import { safeName, saveFrom, toast } from "../files";
@@ -523,6 +524,7 @@ export function PerfTestPage(c: Ctx) {
           <tbody>{d.instruments.map((r: string[]) => <tr key={r[0]}>{r.map((x) => <td key={x}>{x}</td>)}</tr>)}</tbody></table></div>
         <div className="card"><h3>Stability per point</h3><table className="t small"><tbody>{d.stability.map((r: string[]) => <tr key={r[0]}><td>{r[0]}</td><td>{r[1]}</td></tr>)}</tbody></table></div>
       </div>}
+      {d?.trace && <Trace trace={d.trace} />}
     </>
   );
 }

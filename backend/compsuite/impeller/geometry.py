@@ -201,7 +201,95 @@ def impeller_set(sizing: dict, gas, shaft_d: float, material: dict, criteria, ve
                 rec.warn(f"Impeller {st['index'] + 1}: estimate of {r_['key']} differs from vendor by {r_['diff_pct']:.0f} % (limit {r_['limit_pct']:.0f} %)")
         if g["inlet_relative_mach"] > 0.9:
             rec.warn(f"Impeller {st['index'] + 1}: inlet relative Mach {g['inlet_relative_mach']:.2f} > 0.9")
+        _steps(rec, len(out), g, st, m, omega, shaft_d, material, criteria.impeller_yield_fraction)
         out.append(g)
+    if out:
+        dh = [g["de_haller"] for g in out]
+        mr = [g["triangles"]["inlet"]["tip"]["relative_mach"] for g in out]
+        rec.step("Lowest de Haller ratio", r"\min_i\ w_2/w_{1t}", {}, min(dh), "", "", note=f"Lowest of the impellers (impeller {dh.index(min(dh)) + 1}); 0.55 or more is wanted", ui="Min de Haller w2/w1,tip (≥ 0.55)")
+        rec.step("Highest inlet relative Mach number", r"\max_i\ w_{1t}/a_1", {}, max(mr), "", "", note=f"Highest of the impellers (impeller {mr.index(max(mr)) + 1}); 0.9 or less is wanted", ui="Max inlet relative Mach (≤ 0.9)")
     psi_check = [g["work_coefficient"] * st["eta"] for g, st in zip(out, sizing["stages"])]
     return {"impellers": out, "gross_thrust_n": sum(g["thrust_n"] for g in out),
             "head_coefficient_from_geometry": psi_check, "trace": rec}
+
+
+def _steps(rec, row, g, st, m, omega, shaft_d, mat, yf):
+    rec.sym(**{r"\dot m": ("Mass flow", "kg/s"), r"\rho_2": ("Stage outlet density", "kg/m³"), "Q_2": ("Stage outlet volume flow", "m³/s"),
+               "Q_1": ("Stage inlet volume flow", "m³/s"), "U_2": ("Tip speed", "m/s"), "D_2": ("Impeller tip diameter", "m"), "b_2": ("Exit width", "m"),
+               "c_{m2}": ("Outlet meridional velocity", "m/s"), "B": ("Outlet blockage", "-"), "D_1": ("Eye diameter", "m"), "d_h": ("Hub diameter", "m"),
+               "d_s": ("Shaft diameter at the impeller", "m"), "c_{m1}": ("Inlet meridional velocity", "m/s"), "U_1": ("Blade speed at the eye tip", "m/s"),
+               "U": ("Blade speed at the radius", "m/s"), "r": ("Radius", "m"), r"\omega": ("Angular speed", "rad/s"), "w_{1t}": ("Inlet relative velocity at the eye tip", "m/s"),
+               r"\beta_1": ("Inlet flow angle from tangential", "°"), r"\beta_{1b}": ("Inlet blade angle at the tip", "°"), "i": ("Incidence", "°"),
+               "a_1": ("Stage inlet speed of sound", "m/s"), "M_{w1}": ("Inlet relative Mach number at the tip", "-"), r"\sigma": ("Slip factor", "-"),
+               "Z_b": ("Number of blades", "-"), r"\beta_{bs}": ("Backsweep from radial", "°"), "c_{u2}": ("Outlet swirl velocity", "m/s"),
+               "w_2": ("Outlet relative velocity", "m/s"), r"\beta_2": ("Outlet flow angle from tangential", "°"), r"\mu": ("Work coefficient c_u2/U_2", "-"),
+               r"\rho_m": ("Material density", "kg/m³"), "r_o": ("Tip radius", "m"), "r_i": ("Bore radius", "m"), "t_{eq}": ("Equivalent disk thickness", "m"),
+               "m_i": ("Impeller mass", "kg"), "I_p": ("Polar moment of inertia", "kg m²"), "I_t": ("Transverse moment of inertia", "kg m²"),
+               "L": ("Axial length", "m"), "F_a": ("Net axial thrust", "N"), "p_t": ("Static pressure at the tip", "Pa"), "P_1": ("Stage inlet pressure", "Pa"),
+               "P_2": ("Stage outlet pressure", "Pa"), "R_e": ("Eye seal radius", "m"), "R_h": ("Hub seal radius", "m"), "R_2": ("Tip radius", "m"),
+               "k": ("Core rotation factor of the side cavities", "-"), r"\rho": ("Gas density in the cavities", "kg/m³"), r"\nu": ("Poisson ratio", "-"),
+               "S_y": ("Yield strength at temperature", "Pa"), "f_y": ("Allowed fraction of yield", "-"), "U_{max}": ("Tip speed the material allows", "m/s"),
+               r"\sigma_{bore}": ("Bore hoop stress", "Pa"), "DH": ("de Haller ratio", "-")})
+    t, ti, to = g["triangles"], g["triangles"]["inlet"], g["triangles"]["outlet"]
+    tip, D2, b2, D1, dh = ti["tip"], g["D2_mm"] / 1e3, g["b2_mm"] / 1e3, g["D1_eye_mm"] / 1e3, g["hub_mm"] / 1e3
+    ven = g.get("vendor") or {}
+    est = g.get("estimate") or {}
+
+    def vstep(name, ui, key, formula, given, val, unit, sym):
+        if key in ven:
+            rec.step(name, f"{sym} = {sym}^{{\\text{{vendor}}}}", {}, g[key], unit, sym, row,
+                     note=f"Vendor value; the app estimate was {est.get(key, float('nan')):.4g} {unit}", ui=ui)
+        else:
+            rec.step(name, formula, given, val, unit, sym, row, ui=ui)
+    Q2 = m / st["rho_out"]
+    vstep("Exit width b2", "b2 mm", "b2_mm", r"b_2 = \frac{Q_2}{\pi\,D_2\,c_{m2}\,(1-B)},\quad c_{m2} = 0.27\,U_2, \quad Q_2 = \dot m/\rho_2",
+          {r"\dot m": (m, "kg/s"), r"\rho_2": (st["rho_out"], "kg/m³"), "D_2": (D2, "m"), "U_2": (g["tip_speed_m_s"], "m/s"), "B": BLOCKAGE},
+          g["b2_mm"], "mm", "b_2")
+    rec.step("Hub diameter", r"d_h = \min(1.25\,d_s,\ 0.5\,D_2)", {"d_s": (shaft_d, "m"), "D_2": (D2, "m")}, g["hub_mm"], "mm", "d_h", row, ui="Hub mm")
+    rec.step("Eye diameter", r"D_1 = \arg\min_{D_1} w_{1t},\quad w_{1t} = \sqrt{c_{m1}^2 + (\omega D_1/2)^2}",
+             {"Q_1": (st["Q_in_m3_s"], "m³/s"), "d_h": (dh, "m"), r"\omega": (omega, "rad/s")}, g["D1_eye_mm"], "mm", "D_1", row,
+             note="Bounded one-variable search; the eye is kept at or below 0.75 D2", ui="Eye mm")
+    rec.step("Inlet meridional velocity", r"c_{m1} = \frac{Q_1}{(\pi/4)(D_1^2 - d_h^2)}", {"Q_1": (st["Q_in_m3_s"], "m³/s"), "D_1": (D1, "m"), "d_h": (dh, "m")},
+             tip["cm"], "m/s", "c_{m1}", row, note="Axial inflow, no pre-swirl", ui="cm1 m/s")
+    rec.step("Blade speed at the eye tip", r"U_1 = \omega\,D_1/2", {r"\omega": (omega, "rad/s"), "D_1": (D1, "m")}, tip["U"], "m/s", "U_1", row, ui="U1 tip")
+    rec.step("Inlet relative velocity at the tip", r"w_{1t} = \sqrt{c_{m1}^2 + U_1^2}", {"c_{m1}": (tip["cm"], "m/s"), "U_1": (tip["U"], "m/s")}, tip["w"], "m/s", "w_{1t}", row, ui="w1 tip")
+    for nm, lab in (("hub", "β1 hub°"), ("mean", "β1 mean°"), ("tip", "β1 tip°")):
+        x = ti[nm]
+        rec.step(f"Inlet flow angle at the {nm.replace('mean', 'mean radius')}", r"\beta_1 = \arctan(c_{m1}/U),\quad U = \omega\,r", {"c_{m1}": (x["cm"], "m/s"), r"\omega": (omega, "rad/s"), "r": (x["r_mm"] / 1e3, "m")},
+                 x["beta_deg"], "°", r"\beta_1", row, note="Mean radius is the root-mean-square of hub and tip" if nm == "mean" else "", ui=lab)
+    rec.step("Inlet blade angle at the tip", r"\beta_{1b} = \beta_1 + i", {r"\beta_1": (tip["beta_deg"], "°"), "i": (tip["incidence_deg"], "°")}, tip["beta_blade_deg"], "°", r"\beta_{1b}", row, ui="β1b tip°")
+    rec.step("Inlet relative Mach number", r"M_{w1} = w_{1t}/a_1", {"w_{1t}": (tip["w"], "m/s"), "a_1": (st.get("sound_in"), "m/s")}, tip["relative_mach"], "", "M_{w1}", row, ui="Mrel1")
+    rec.step("Tip speed U2", r"U_2 = \omega\,D_2/2", {r"\omega": (omega, "rad/s"), "D_2": (D2, "m")}, to["U"], "m/s", "U_2", row, ui="U2")
+    rec.step("Outlet meridional velocity", r"c_{m2} = \frac{Q_2}{\pi\,D_2\,b_2\,(1-B)}", {"Q_2": (Q2, "m³/s"), "D_2": (D2, "m"), "b_2": (b2, "m"), "B": BLOCKAGE},
+             to["cm"], "m/s", "c_{m2}", row, ui="cm2")
+    rec.step("Slip factor", r"\sigma = 1 - \frac{\sqrt{\cos\beta_{bs}}}{Z_b^{0.7}}", {r"\beta_{bs}": (BACKSWEEP_DEG, "°"), "Z_b": g["blades"]},
+             to["slip_factor"], "", r"\sigma", row, ui="Slip σ")
+    rec.step("Outlet swirl velocity", r"c_{u2} = U_2\left(\sigma - \frac{c_{m2}}{U_2}\tan\beta_{bs}\right)", {"U_2": (to["U"], "m/s"), r"\sigma": to["slip_factor"],
+             "c_{m2}": (to["cm"], "m/s"), r"\beta_{bs}": (BACKSWEEP_DEG, "°")}, to["cu"], "m/s", "c_{u2}", row, ui="cu2")
+    rec.step("Outlet relative velocity", r"w_2 = \sqrt{c_{m2}^2 + (U_2 - c_{u2})^2}", {"c_{m2}": (to["cm"], "m/s"), "U_2": (to["U"], "m/s"), "c_{u2}": (to["cu"], "m/s")},
+             to["w"], "m/s", "w_2", row, ui="w2")
+    rec.step("Outlet flow angle", r"\beta_2 = \arctan\frac{c_{m2}}{U_2 - c_{u2}}", {"c_{m2}": (to["cm"], "m/s"), "U_2": (to["U"], "m/s"), "c_{u2}": (to["cu"], "m/s")},
+             to["beta_deg"], "°", r"\beta_2", row, ui="β2 flow°")
+    rec.step("de Haller ratio", r"DH = w_2 / w_{1t}", {"w_2": (to["w"], "m/s"), "w_{1t}": (tip["w"], "m/s")}, t["de_haller"], "", "DH", row, ui="de Haller")
+    rec.step("Width ratio b2/D2", r"b_2/D_2", {"b_2": (b2, "m"), "D_2": (D2, "m")}, g["b2_D2"], "", "", row, ui="b2/D2")
+    rec.step("Work coefficient", r"\mu = c_{u2}/U_2", {"c_{u2}": (to["cu"], "m/s"), "U_2": (to["U"], "m/s")}, t["work_coefficient"], "", r"\mu", row, ui="Work μ")
+    rho_m, r_o, r_i = mat["density_kg_m3"], D2 / 2, shaft_d / 2
+    t_eq = 0.035 * D2 + b2
+    vstep("Impeller mass", "Mass kg", "mass_kg", r"m_i = 0.62\,\rho_m\,\pi\,(r_o^2 - r_i^2)\,t_{eq},\quad t_{eq} = 0.035\,D_2 + b_2",
+          {r"\rho_m": (rho_m, "kg/m³"), "r_o": (r_o, "m"), "r_i": (r_i, "m"), "D_2": (D2, "m"), "b_2": (b2, "m")}, g["mass_kg"], "kg", "m_i")
+    vstep("Polar moment of inertia", "Ip kg·m²", "ip_kgm2", r"I_p = \tfrac12\,m_i\,(0.55\,r_o^2 + r_i^2)", {"m_i": (g["mass_kg"], "kg"), "r_o": (r_o, "m"), "r_i": (r_i, "m")},
+          g["ip_kgm2"], "kg·m²", "I_p")
+    vstep("Transverse moment of inertia", "It kg·m²", "it_kgm2", r"I_t = \tfrac12\,I_p + m_i\,L^2/12,\quad L = t_{eq} + 0.6\,b_2 + 0.02\,D_2",
+          {"I_p": (g["ip_kgm2"], "kg m²"), "m_i": (g["mass_kg"], "kg"), "t_{eq}": (t_eq, "m"), "b_2": (b2, "m"), "D_2": (D2, "m")}, g["it_kgm2"], "kg·m²", "I_t")
+    p1, p2 = st["P_in_bara"] * 1e5, st["P_out_bara"] * 1e5
+    rec.step("Axial thrust", r"F_a = \pi\Big[(p_t - P_1 - \tfrac12\rho (k\omega)^2 R_2^2)(R_e^2 - R_h^2) + \tfrac14\rho (k\omega)^2 (R_e^4 - R_h^4)\Big] - \dot m\,c_{m1}",
+             {"p_t": (p1 + 0.6 * (p2 - p1), "Pa"), "P_1": (p1, "Pa"), r"\rho": (st["rho_out"], "kg/m³"), "k": 0.5, r"\omega": (omega, "rad/s"),
+              "R_2": (D2 / 2, "m"), "R_e": (1.05 * D1 / 2, "m"), "R_h": (dh / 2, "m"), r"\dot m": (m, "kg/s"), "c_{m1}": (g["inlet_cm_m_s"], "m/s")},
+             g["thrust_n"] / 1e3, "kN", "F_a", row, note="Tip pressure p_t = P_1 + 0.6 (P_2 − P_1); side-cavity gas turns at half the shaft speed; positive toward the eye", ui="Thrust kN")
+    nu = mat.get("poisson", 0.3)
+    sy = (g.get("material_override", {}).get("yield_mpa") or mat["yield_mpa"]) * 1e6
+    rec.step("Tip speed limit of the material", r"U_{max} = \sqrt{\frac{f_y\,S_y}{\rho_m\,(3+\nu)/4}}", {"f_y": yf, "S_y": (sy, "Pa"), r"\rho_m": (rho_m, "kg/m³"), r"\nu": nu},
+             g["max_tip_speed_for_material_m_s"], "m/s", "U_{max}", row, note="Centre stress of a solid spinning disk set equal to the allowed stress", ui="Umax mat. m/s")
+    rec.step("Bore hoop stress", r"\sigma_{bore} = \frac{3+\nu}{4}\,\rho_m\,\omega^2\left(r_o^2 + \frac{1-\nu}{3+\nu}\,r_i^2\right)",
+             {r"\nu": nu, r"\rho_m": (rho_m, "kg/m³"), r"\omega": (omega, "rad/s"), "r_o": (D2 / 2 if "D2_mm" not in ven else est["D2_mm"] / 2e3, "m"), "r_i": (r_i, "m")},
+             g["bore_hoop_stress_mpa"], "MPa", r"\sigma_{bore}", row, note="Uniform-thickness spinning ring at design speed")

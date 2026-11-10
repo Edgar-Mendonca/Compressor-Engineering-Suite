@@ -79,7 +79,7 @@ def size_compressor(gas, project) -> dict:
     # Section boundaries (pressures), iterate efficiency.
     eta_sec = [eta_guess] * n_sections
     stages_per_section = [1] * n_sections
-    for _ in range(4):
+    for it in range(4):
         sections, T_in, P_in = [], T1, P1
         pr_sec = (P2 / P1) ** (1.0 / n_sections)
         for i in range(n_sections):
@@ -135,7 +135,7 @@ def size_compressor(gas, project) -> dict:
     ds = D2 * (head_total / n_total) ** 0.25 / math.sqrt(Q1)
     config = ("Straight-through" if n_sections == 1 else f"{n_sections}-section with intercooling") + \
              f", {n_casings} casing{'s' if n_casings > 1 else ''}, {n_total} impellers"
-    return {
+    out = {
         "configuration": config,
         "type_selection": _type_selection(Q1, P2 / P1, m),
         "n_sections": n_sections,
@@ -163,6 +163,85 @@ def size_compressor(gas, project) -> dict:
         "stages": stages,
         "trace": rec,
     }
+    _steps(rec, db, out, m, rho1, T1, P1, P2, U2_max, it + 1)
+    return out
+
+
+def _steps(rec, db, o: dict, m: float, rho1: float, T1: float, P1: float, P2: float, U2_max: float, iters: int) -> None:
+    rec.sym(**{r"\dot m": ("Mass flow", "kg/s"), r"\rho_1": ("Suction density", "kg/m³"), "Q_1": ("Actual suction volume flow", "m³/s"),
+               "Q": ("Stage inlet volume flow", "m³/s"), r"\rho": ("Stage inlet density", "kg/m³"), "P_1": ("Suction pressure", "Pa"),
+               "P_2": ("Discharge pressure", "Pa"), "T_1": ("Suction temperature", "K"), "T_{max}": ("Discharge temperature limit", "°C"),
+               "N_{sec}": ("Number of sections", "-"), "a_1": ("Suction speed of sound", "m/s"), "U_{2,lim}": ("Tip speed limit (material input)", "m/s"),
+               "M_{u,max}": ("Machine Mach number limit", "-"), "U_{2,max}": ("Allowed tip speed", "m/s"), "H_p": ("Total polytropic head", "J/kg"),
+               "H_{st}": ("Stage polytropic head", "J/kg"), r"\psi": ("Head coefficient", "-"), r"\phi": ("Flow coefficient", "-"),
+               r"\phi_1": ("First-stage flow coefficient", "-"), "z": ("Number of impellers", "-"), "U_2": ("Tip speed", "m/s"),
+               "D_2": ("Impeller tip diameter", "m"), r"\omega": ("Angular speed", "rad/s"), "N": ("Speed", "rpm"), "M_u": ("Machine Mach number", "-"),
+               r"\eta_p": ("Polytropic efficiency", "-"), r"\eta_i": ("Stage polytropic efficiency", "-"), r"\Delta h": ("Enthalpy rise", "J/kg"),
+               "P_g": ("Gas power", "W"), "P_{sh}": ("Shaft power", "W"), "k_m": ("Mechanical loss fraction", "-"), "f_d": ("Driver rating margin", "-"),
+               "N_s": ("Specific speed", "-"), "D_s": ("Specific diameter", "-"), "P_{in}": ("Stage inlet pressure", "Pa"),
+               "P_{out}": ("Stage outlet pressure", "Pa"), "T_{out}": ("Stage outlet temperature", "K"), "h_{in}": ("Stage inlet enthalpy", "J/kg"),
+               "m_n": ("Polytropic exponent ratio n/(n-1)", "-"), "Z": ("Compressibility factor at stage inlet", "-"), "R": ("Gas constant", "J/(kg K)"),
+               "T": ("Stage inlet temperature", "K"), "P_{st}": ("Stage power", "W"),
+               "k": ("Isentropic exponent at stage inlet", "-"), "P_{dr}": ("Driver rating", "W"), "h": ("Enthalpy", "J/kg"), "v": ("Specific volume", "m³/kg"),
+               "D_{2,input}": ("Impeller diameter set by the user", "m"), "z_{input}": ("Impeller count set by the user", "-")})
+    Q1, H, z, U2, D2, w = o["suction_volume_flow_m3_s"], o["polytropic_head_total_j_kg"], o["n_stages"], o["tip_speed_m_s"], o["impeller_diameter_m"], o["speed_rpm"] * math.pi / 30
+    dh = H / o["polytropic_efficiency_overall"]
+    ts = o["type_selection"]
+    rec.step("Actual suction volume flow", r"Q_1 = \dot m / \rho_1", {r"\dot m": (m, "kg/s"), r"\rho_1": (rho1, "kg/m³")}, Q1 * 3600, "m³/h", "Q_1",
+             note="× 3600 for m³/h")
+    rec.step("Recommended type", r"Q_1 \rightarrow \text{type}", {"Q_1": (ts["suction_flow_am3_h"], "m³/h")}, ts["recommended"], "", "",
+             note="Looked up in the suction-flow range table; centrifugal from 1500 to 250000 Am³/h")
+    rec.step("Number of sections", r"N_{sec} = \min\{N : T_{out} \le T_{max}\ \text{in every section}\}",
+             {"T_{max}": (db.max_discharge_temperature_c, "°C"), "P_1": (P1, "Pa"), "P_2": (P2, "Pa")}, o["n_sections"], "", "N_{sec}",
+             note="Sections added one at a time (up to 4), equal pressure ratio per section, gas cooled between sections", ui="Configuration")
+    rec.step("Allowed tip speed", r"U_{2,max} = \min(U_{2,lim},\ M_{u,max}\,a_1)",
+             {"U_{2,lim}": (db.max_tip_speed_m_s, "m/s"), "M_{u,max}": db.max_machine_mach, "a_1": (o["inlet_sound_speed_m_s"], "m/s")}, U2_max, "m/s", "U_{2,max}")
+    rec.step("Polytropic head", r"H_p = \sum_{sec} \int v\,dP", {"P_1": (P1, "Pa"), "P_2": (P2, "Pa")}, H / 1e3, "kJ/kg", "H_p",
+             note="Sum of the section heads on the real-gas model")
+    if db.stages_override:
+        rec.step("Number of impellers", "z = z_{input}", {}, z, "", "z", note="Set by the user")
+    else:
+        rec.step("Number of impellers", r"z = \left\lceil \frac{H_p}{\psi\,U_{2,max}^2} \right\rceil",
+                 {"H_p": (H, "J/kg"), r"\psi": db.head_coefficient, "U_{2,max}": (U2_max, "m/s")}, z, "", "z")
+    if db.speed_rpm_override:
+        rec.step("Tip speed", r"U_2 = \omega\,D_2/2", {r"\omega": (w, "rad/s"), "D_2": (D2, "m")}, U2, "m/s", "U_2", note="Speed set by the user")
+    else:
+        rec.step("Tip speed", r"U_2 = \sqrt{\frac{H_p}{z\,\psi}}", {"H_p": (H, "J/kg"), "z": z, r"\psi": db.head_coefficient}, U2, "m/s", "U_2")
+    if db.impeller_diameter_mm_override:
+        rec.step("Impeller tip diameter", "D_2 = D_{2,input}", {}, D2 * 1e3, "mm", "D_2", note="Set by the user", ui="Impeller D2")
+    else:
+        rec.step("Impeller tip diameter", r"D_2 = \sqrt{\frac{4\,Q_1}{\pi\,\phi_1\,U_2}}", {"Q_1": (Q1, "m³/s"), r"\phi_1": db.first_stage_flow_coefficient,
+                 "U_2": (U2, "m/s")}, D2 * 1e3, "mm", "D_2", ui="Impeller D2")
+    rec.step("Speed", r"N = \frac{60}{2\pi}\,\frac{2\,U_2}{D_2}", {"U_2": (U2, "m/s"), "D_2": (D2, "m")}, o["speed_rpm"], "rpm", "N")
+    rec.step("Machine Mach number", r"M_u = U_2 / a_1", {"U_2": (U2, "m/s"), "a_1": (o["inlet_sound_speed_m_s"], "m/s")}, o["machine_mach"], "", "M_u", ui="Machine Mach")
+    rec.step("Overall polytropic efficiency", r"\eta_p = \frac{\sum H_{st}}{\sum H_{st}/\eta_i}", {"H_p": (H, "J/kg"), r"\Delta h": (dh, "J/kg")},
+             o["polytropic_efficiency_overall"], "", r"\eta_p",
+             note=f"Stage march repeated until the section efficiencies changed by less than 0.0002 ({iters} passes)", ui="ηp overall")
+    rec.step("Gas power", r"P_g = \dot m\,\Delta h", {r"\dot m": (m, "kg/s"), r"\Delta h": (dh, "J/kg")}, o["gas_power_kw"], "kW", "P_g")
+    rec.step("Shaft power", r"P_{sh} = P_g\,(1 + k_m)", {"P_g": (o["gas_power_kw"] * 1e3, "W"), "k_m": db.mechanical_loss_fraction},
+             o["shaft_power_kw"], "kW", "P_{sh}")
+    rec.step("Driver rating", r"P_{dr} = P_{sh}\,f_d", {"P_{sh}": (o["shaft_power_kw"] * 1e3, "W"), "f_d": db.driver_rating_margin},
+             o["driver_rating_kw"], "kW", "P_{dr}")
+    rec.step("Specific speed", r"N_s = \frac{\omega\,\sqrt{Q_1}}{(H_p/z)^{3/4}}", {r"\omega": (w, "rad/s"), "Q_1": (Q1, "m³/s"),
+             "H_p": (H, "J/kg"), "z": z}, o["specific_speed"], "", "N_s", ui="Specific speed Ns")
+    rec.step("Specific diameter", r"D_s = \frac{D_2\,(H_p/z)^{1/4}}{\sqrt{Q_1}}", {"D_2": (D2, "m"), "H_p": (H, "J/kg"), "z": z,
+             "Q_1": (Q1, "m³/s")}, o["specific_diameter"], "", "D_s", ui="Specific diameter Ds")
+    for s in o["stages"]:
+        i, hs, eta = s["index"], s["head"], s["eta"]
+        rec.step("Stage inlet volume flow", r"Q = \dot m / \rho", {r"\dot m": (m, "kg/s"), r"\rho": (s["rho_in"], "kg/m³")}, s["Q_in_m3_s"], "m³/s", "Q", i, ui="Q in m³/s")
+        rec.step("Flow coefficient", r"\phi = \frac{Q}{(\pi/4)\,D_2^2\,U_2}", {"Q": (s["Q_in_m3_s"], "m³/s"), "D_2": (D2, "m"), "U_2": (U2, "m/s")},
+                 s["phi"], "", r"\phi", i, ui="φ")
+        rec.step("Head coefficient", r"\psi = H_{st} / U_2^2", {"H_{st}": (hs, "J/kg"), "U_2": (U2, "m/s")}, s["psi"], "", r"\psi", i,
+                 note="Section head shared equally by its impellers", ui="ψ")
+        rec.step("Stage polytropic efficiency", r"\eta_i = f(\phi,\ M_u)", {r"\phi": s["phi"], "M_u": o["machine_mach"]}, eta, "", r"\eta_i", i,
+                 note="Typical stage efficiency against flow coefficient, lowered above Mu = 0.9", ui="ηp")
+        rec.step("Stage outlet pressure", r"P_{out} = P_{in}\left(1 + \frac{H_{st}}{m_n\,Z\,R\,T}\right)^{m_n},\quad m_n = \eta_i\,\frac{k}{k-1}",
+                 {"P_{in}": (s["P_in_bara"] * 1e5, "Pa"), "H_{st}": (hs, "J/kg"), r"\eta_i": eta, "T": (s["T_in_c"] + 273.15, "K")},
+                 s["P_out_bara"], "bara", "P_{out}", i, note="Z and the exponent k taken from the real-gas state at the stage inlet", ui="P out")
+        rec.step("Stage outlet temperature", r"h(T_{out}, P_{out}) = h_{in} + H_{st}/\eta_i", {"H_{st}": (hs, "J/kg"), r"\eta_i": eta,
+                 "P_{out}": (s["P_out_bara"] * 1e5, "Pa")}, s["T_out_c"], "°C", "T_{out}", i, note="Solved on the equation of state for the enthalpy", ui="T out °C")
+        rec.step("Stage power", r"P_{st} = \dot m\,H_{st}/\eta_i", {r"\dot m": (m, "kg/s"), "H_{st}": (hs, "J/kg"), r"\eta_i": eta},
+                 s["power_kw"], "kW", "P_{st}", i, ui="Power kW")
 
 
 def _distribute(n_total, heads):

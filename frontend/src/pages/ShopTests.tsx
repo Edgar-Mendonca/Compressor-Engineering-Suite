@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Trace } from "./common";
 import { fmt, type Json } from "../api";
 
 // API 617 shop-test simulator (backend testing/shoptest.py): balancing limits, residual
@@ -179,6 +180,7 @@ export function ShopTestsPage(c: Ctx) {
           <table className="t" style={{ marginTop: 8 }}><tbody>{th.checks.map((q: Json) => <tr key={q.check}><td>{q.check}</td><td className="muted">{q.criterion}</td><td className="n">{fmt(q.value, 2)}</td><td><Pill s={q.status} /></td></tr>)}</tbody></table>
           <p className="muted small">Coupling type is set in Torsional train inputs (gear couplings add friction thrust).</p></div>
       </div>}
+      {d?.trace && <Trace trace={d.trace} />}
     </>
   );
 }

@@ -13,6 +13,8 @@ import math
 
 import numpy as np
 
+from compsuite.core.trace import record
+
 OZIN_TO_GMM = 28.3495 * 25.4
 
 
@@ -36,7 +38,7 @@ def residual_unbalance_check(angles_deg: list[float], amplitudes: list[float], t
     return {"residual_g_mm": u0, "residual_angle_deg": ang, "sensitivity_per_g_mm": math.sqrt(x), "allowable_g_mm": allowable_g_mm,
             "ratio": u0 / allowable_g_mm, "status": "pass" if u0 <= allowable_g_mm else "fail",
             "fit": {"angle_deg": np.degrees(tt).round(1).tolist(), "amplitude": fit.round(4).tolist()},
-            "trial_ok": allowable_g_mm <= trial_g_mm <= 2.5 * allowable_g_mm}
+            "trial_ok": allowable_g_mm <= trial_g_mm <= 2.5 * allowable_g_mm, "trial_g_mm": trial_g_mm}
 
 
 def _c(amp, ph):
@@ -105,3 +107,60 @@ def overspeed_record(predicted_um: dict, measured: list[dict] | None, allowable:
                      "status": "pass" if abs(d_um) <= lim else "fail"})
     return {"predicted_um": predicted_um, "allowable_um": allow, "rows": rows,
             "status": "pass" if rows and all(r["status"] == "pass" for r in rows) else ("fail" if rows else "review")}
+
+
+def shop_trace(out: dict):
+    """Calculation steps of the /api/shoptest result (balancing limits, rotor class, residual check, influence balance, overspeed)."""
+    rec = record("testing.shoptest", "Shop balancing limits, residual unbalance check, influence-coefficient balancing, overspeed record",
+                 assumptions=["Allowable unbalance per plane from the static journal load; per impeller from its mass",
+                              "Residual check: trial weight at six or more angles, least-squares fit of amplitude squared"])
+    n = out["speeds"]["mcs_rpm"]
+    rec.sym(**{"U": ("Allowable residual unbalance", "g·mm"), "W": ("Mass (impeller) or journal static load", "kg"), "N_{mc}": ("Maximum continuous speed", "rpm"),
+               "U_h": ("Handbook allowable unbalance (4 W/N in oz·in)", "g·mm"), "W_{lb}": ("Mass in pounds", "lb"), "e": ("Allowable mass eccentricity", "µm"),
+               "N_{c1}": ("First critical speed on rigid supports", "rpm"), "r_N": ("Speed ratio MCS / first critical", "-"), "F": ("Static journal load", "N"),
+               "g": ("Gravity", "m/s²"), r"\theta": ("Trial weight angle", "°"), "V": ("Vibration reading", "µm or mm/s"), "a": ("Fitted mean of V²", "-"),
+               "b": ("Fitted cosine term", "-"), "c": ("Fitted sine term", "-"), "U_0": ("Residual unbalance", "g·mm"), "U_t": ("Trial weight", "g·mm"),
+               "h": ("Sensitivity (reading per g·mm)", "-"), r"\mathbf{A}": ("Influence coefficients (reading change per trial weight)", "-"),
+               r"\mathbf{V}_0": ("Initial readings (amplitude and phase)", "-"), r"\mathbf{V}_t": ("Readings with a trial weight", "-"),
+               r"\mathbf{W}": ("Correction weights", "g·mm"), r"\mathbf{W}_t": ("Trial weights", "g·mm"), r"\mathbf{V}_r": ("Predicted readings after correction", "-"),
+               "D_0": ("Diameter before the overspeed run", "mm"), "D_1": ("Diameter after the overspeed run", "mm"), r"\Delta r": ("Permanent radial change", "µm"),
+               "A_{vl}": ("Running-test vibration limit", "µm pk-pk")})
+    st = rec.step
+    for i, q in enumerate(out["component_balance"]):
+        st("Component allowable unbalance", r"U = \frac{6350\,W}{N_{mc}}", {"W": (q["mass_kg"], "kg"), "N_{mc}": (n, "rpm")}, q["api617_g_mm"], "g·mm", "U",
+           row=i, note=q["component"], ui="API 617 g·mm")
+        st("Handbook allowable unbalance", r"U_h = \frac{4\,W_{lb}}{N_{mc}} \times 720.08", {"W_{lb}": (q["mass_kg"] / 0.45359237, "lb"), "N_{mc}": (n, "rpm")},
+           q["handbook_g_mm"], "g·mm", "U_h", row=i, note="720.08 g·mm per oz·in", ui="Handbook 4W/N g·mm")
+        st("Allowable eccentricity", r"e = U / W", {"U": (q["api617_g_mm"], "g·mm"), "W": (q["mass_kg"], "kg")}, q["eccentricity_um"], "µm", "e", row=i,
+           ui="Eccentricity µm")
+    for i, q in enumerate(out["rotor_balance"]):
+        st("Journal static load as mass", r"W = F / g", {"F": (q["static_load_kg"] * 9.81, "N"), "g": (9.81, "m/s²")}, q["static_load_kg"], "kg", "W", row=i,
+           ui="Static load kg")
+        st("Allowable unbalance per plane", r"U = \min\!\left(\frac{6350\,W}{N_{mc}},\ U_h\right)", {"W": (q["static_load_kg"], "kg"), "N_{mc}": (n, "rpm"),
+           "U_h": (q["handbook_g_mm"], "g·mm")}, q["governing_g_mm"], "g·mm", "U", row=i, note=q["plane"],
+           ui=["Allowable g·mm", "Allowable unbalance / plane"] if i == 0 else "Allowable g·mm")
+    rc = out["rotor_class"]
+    st("Rotor class", r"r_N = N_{mc} / N_{c1}", {"N_{mc}": (n, "rpm"), "N_{c1}": (n / rc["ratio_mcs_to_first_critical"], "rpm")},
+       rc["ratio_mcs_to_first_critical"], "", "r_N", note=f"Above 0.7 the rotor is treated as flexible: {rc['class']}")
+    rt = out["running_test"]
+    st("Running-test vibration limit", r"A_{vl} = \min\!\left(25.4\sqrt{12000/N_{mc}},\ 25.4\right)", {"N_{mc}": (n, "rpm")}, rt["limit_um"], "µm pk-pk", "A_{vl}")
+    r = out.get("residual_check")
+    if r:
+        st("Residual unbalance", r"V^2 = a + 2b\cos\theta + 2c\sin\theta,\quad U_0 = \frac{\sqrt{b^2+c^2}}{h^2\,U_t},\quad h^2 = \frac{a + \sqrt{a^2 - 4(b^2+c^2)}}{2\,U_t^2}",
+           {"U_t": (r["trial_g_mm"], "g·mm"), "h": r["sensitivity_per_g_mm"]}, r["residual_g_mm"], "g·mm", "U_0",
+           note=f"Least-squares fit over the readings; heavy spot at {r['residual_angle_deg']:.0f}°")
+        st("Residual to allowable ratio", "U_0 / U", {"U_0": (r["residual_g_mm"], "g·mm"), "U": (r["allowable_g_mm"], "g·mm")}, r["ratio"], "", ui="Ratio")
+    f = out.get("influence")
+    if f:
+        st("Influence coefficients", r"\mathbf{A}_{:,j} = \frac{\mathbf{V}_t - \mathbf{V}_0}{\mathbf{W}_t}", {}, len(f["corrections"]), "planes",
+           note="One trial run per plane; complex amplitudes (amplitude ∠ phase)")
+        for i, q in enumerate(f["corrections"]):
+            st("Correction weight", r"\mathbf{W} = -\mathbf{A}^{+}\,\mathbf{V}_0", {}, f"{q['weight_g_mm']:.0f} ∠ {q['angle_deg']:.0f}°", "g·mm", row=i,
+               note=f"{q['plane']}; least squares (pseudo-inverse) when probes outnumber planes", ui="Correction")
+        for i, q in enumerate(f["predicted"]):
+            st("Predicted reading after correction", r"\mathbf{V}_r = \mathbf{V}_0 + \mathbf{A}\,\mathbf{W}", {}, q["amp"], "", row=i, note=q["probe"],
+               ui="Predicted after")
+    for i, q in enumerate(out["overspeed"]["rows"]):
+        st("Permanent radial change", r"\Delta r = \frac{D_1 - D_0}{2}", {"D_0": (q["before_mm"], "mm"), "D_1": (q["after_mm"], "mm")}, q["radial_change_um"], "µm",
+           r"\Delta r", row=i, note=f"{q['location']}; allowable {q['allowable_um']:g} µm", ui="Change µm (radial)")
+    return rec

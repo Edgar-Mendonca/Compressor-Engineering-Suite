@@ -236,6 +236,7 @@ def lateral_analysis(model: fe.RotorModel, rotor: dict, sizing: dict, project, w
 
     all_pass = all(p["pass"] for c in cases for p in c["peaks"]) and all(a["pass"] for c in cases for a in c["amplitude_checks"]) \
         and all(a["pass"] for c in cases for a in c["clearance_checks"])
+    _steps(rec, model, db, N, (n_min, n_mcs, n_trip), cr, v2, stab2, n1_rigid, modes, concl)
     return {"mass_properties": mp, "bearing_static_loads_n": loads, "campbell": camp, "undamped_critical_map": ucs,
             "modes_at_mcs": modes, "z_m": z.tolist(), "unbalance_cases": cases, "stability": stability,
             "speeds": {"min_rpm": n_min, "rated_rpm": N, "mcs_rpm": n_mcs, "trip_rpm": n_trip},
@@ -244,6 +245,147 @@ def lateral_analysis(model: fe.RotorModel, rotor: dict, sizing: dict, project, w
             [{k: u[k] for k in ("case", "label", "unbalances")} for u in v2[0]["unbalance"]],
             "stability_api617": stab2, "seal_coefficients_lateral": seal_rows, "conclusion": {"items": concl, "pass": all(i["pass"] or "Level I" in i["item"] for i in concl)},
             "trace": rec}
+
+
+def _steps(rec, model, db, N, spd, cr, v2, s2, n1r, modes, concl) -> None:
+    from compsuite.rotordynamics.stability import BC, C_API
+    n_min, n_mcs, n_trip = spd
+    rec.sym(**{"N_r": ("Rated speed", "rpm"), "p_{min}": ("Minimum speed as % of rated", "%"), "p_{mc}": ("Maximum continuous speed as % of rated", "%"),
+               "p_{tr}": ("Trip speed as % of rated", "%"), "N_{min}": ("Minimum operating speed", "rpm"), "N_{mc}": ("Maximum continuous speed", "rpm"),
+               "N_{tr}": ("Trip speed", "rpm"), r"\mathbf{M}": ("Mass matrix", "-"), r"\mathbf{C}": ("Bearing and seal damping matrix", "-"),
+               r"\mathbf{G}": ("Gyroscopic matrix", "-"), r"\mathbf{K}": ("Shaft and bearing stiffness matrix", "-"), r"\mathbf{q}": ("Nodal displacements and slopes", "m, rad"),
+               r"\mathbf{F}": ("Unbalance forces", "N"), r"\Omega": ("Shaft speed", "rad/s"), "n_e": ("Number of beam elements", "-"),
+               "n_{dof}": ("Degrees of freedom (4 per node)", "-"), "L_{max}": ("Largest element length", "m"), "n_R": ("Modes kept in the reduced model", "-"),
+               "N_{c1}": ("First critical speed on rigid supports", "rpm"), "CSR": ("Critical speed ratio", "-"),
+               "A_{vl}": ("Vibration limit", "µm pk-pk"), "A_{cap}": ("Upper cap of the vibration limit", "µm"),
+               "q_A": ("Expected aerodynamic cross-coupling of one impeller", "kN/mm"), "P_s": ("Stage power", "kW"), "B_c": ("Cross-coupling constant", "-"),
+               "C": ("Unit constant", "-"), "D_c": ("Impeller diameter", "mm"), "H_c": ("Smallest flow passage width at the impeller exit", "mm"),
+               r"\rho_s": ("Gas density at stage inlet", "kg/m³"), r"\rho_d": ("Gas density at stage outlet", "kg/m³"), "Q_A": ("Total expected cross-coupling", "kN/mm"),
+               r"\bar\rho": ("Average gas density", "kg/m³"), "Q_0": ("Cross-coupling that makes the log decrement zero", "kN/mm"),
+               r"\delta_A": ("Log decrement with Q_A applied", "-"), r"\delta_b": ("Log decrement, rotor and bearings only", "-"),
+               r"\delta_f": ("Log decrement with seals added", "-"), r"\delta_{min}": ("Required minimum log decrement", "-"),
+               "U_r": ("Allowable residual unbalance", "g·mm"), "U_a": ("Applied unbalance", "g·mm"), "W": ("Journal static load as mass", "kg"),
+               "K_u": ("Residual unbalance constant", "-"), "W_c": ("Coupling half mass", "kg"), "U_c": ("Coupling unbalance", "g·mm"),
+               "N_c": ("Critical speed (response peak)", "rpm"), "N_1": ("Lower half-power speed", "rpm"), "N_2": ("Upper half-power speed", "rpm"),
+               "AF": ("Amplification factor", "-"), r"\zeta": ("Damping ratio of the nearest mode", "-"), "SM": ("Actual separation margin", "%"),
+               "SM_{req}": ("Required separation margin", "%"), "A_{max}": ("Largest probe response in the operating speed range", "µm pk-pk"),
+               "S_{cc}": ("Amplitude scale factor", "-"), "A_p": ("Largest response at the station up to trip speed", "µm pk-pk"),
+               "A_s": ("Scaled response", "µm pk-pk"), "c_d": ("Minimum diametral running clearance", "µm"), "f_d": ("Damped natural frequency", "cpm"),
+               r"\delta": ("Logarithmic decrement", "-"), r"\lambda": ("Complex eigenvalue", "1/s"), r"\omega_n": ("Undamped natural frequency", "rad/s"),
+               r"\omega_d": ("Damped natural frequency", "rad/s"), r"\omega": ("Natural frequency", "rad/s"), r"\boldsymbol\phi": ("Mode shape", "-"),
+               "k_b": ("Bearing stiffness", "N/m"), "A": ("Response amplitude at a probe", "µm pk-pk"), "A_{probe}": ("Response amplitude at a bearing probe", "µm pk-pk"),
+               "CSR_{AB}": ("Region A / B boundary on the screening chart", "-"), r"\delta_1": ("Log decrement of the first forward mode", "-")})
+    names = {"Speed range": "Operating speed range", "Trip": "Trip speed", "FCSR (rigid supports)": ("First critical speed on rigid supports", ["FCSR (rigid supports)", "FCSR"]),
+             "CSR": ("Critical speed ratio", ["CSR", "CSR = Nmc / FCSR"]), "Avl": "Vibration limit", "qA kN/mm": "Impeller cross-coupling",
+             "QA (Σ qA)": ("Total cross-coupling", ["QA (Σ qA)", "QA = Σ qA", "QA kN/mm"]), "Avg gas density": "Average gas density",
+             "Q0 kN/mm": "Cross-coupling for zero damping", "Q0/QA": "Stability ratio", "δA": "Log decrement with QA", "Region": "Screening region",
+             "Rotor + bearings δb": "Log decrement, rotor and bearings", "+ seals, min seal clr δf": "Log decrement with seals, min seal clearance",
+             "+ seals, max seal clr δf": "Log decrement with seals, max seal clearance", "Min δf (Level II)": "Lowest final log decrement",
+             "Unbalance g·mm": "Applied unbalance", "AF": "Amplification factor", "Critical rpm": "Critical speed", "SM actual %": "Separation margin",
+             "SM required %": "Required separation margin", "Amax": "Largest response in the speed range", "Scc": "Amplitude scale factor",
+             "Max Ap µm": "Largest response at the station", "Corrected µm": "Scaled response", "75 % clearance µm": "Clearance limit", "Overall": "Overall result"}
+
+    def st(label, *a, **k):
+        n = names.get(label, label)
+        n, ui = (n if isinstance(n, tuple) else (n, label if label in names else ""))
+        return rec.step(n, *a, ui=ui, **k)
+    st("Speed range", r"N_{min} = N_r\,p_{min}/100,\quad N_{mc} = N_r\,p_{mc}/100", {"N_r": (N, "rpm"), "p_{min}": db.min_operating_speed_pct,
+       "p_{mc}": db.max_continuous_speed_pct}, f"{n_min:.0f}–{n_mcs:.0f}", "rpm", "N_{mc}")
+    st("Trip", r"N_{tr} = N_r\,p_{tr}/100", {"N_r": (N, "rpm"), "p_{tr}": db.trip_speed_pct}, n_trip, "rpm", "N_{tr}")
+    st("Rotor model", r"n_{dof} = 4\,(n_e + 1)", {"n_e": len(model.nodes) - 1, "L_{max}": (model.max_element_length, "m")}, 4 * len(model.nodes), "",
+       "n_{dof}", note="Timoshenko beam elements no longer than L_max; impellers and sleeves as lumped masses with their inertias")
+    st("Equation of motion", r"\mathbf{M}\ddot{\mathbf{q}} + (\mathbf{C} + \Omega\mathbf{G})\dot{\mathbf{q}} + \mathbf{K}\mathbf{q} = \mathbf{F}\,e^{i\Omega t}",
+       {r"\Omega": (n_mcs * math.pi / 30, "rad/s"), "n_R": 40}, 40, "modes", "n_R",
+       note="Bearing K and C read from the bearing tables at each speed; solved on a reduced model of 40 modes (checked against the full model)")
+    fw = next((m for m in modes if m["whirl"] != "backward"), None)
+    if fw:
+        st("First forward damped mode at MCS", r"\lambda = -\zeta\omega_n \pm i\,\omega_d,\quad \delta = \frac{2\pi\zeta}{\sqrt{1-\zeta^2}}",
+           {r"\Omega": (n_mcs * math.pi / 30, "rad/s"), "f_d": (fw["freq_cpm"], "cpm")}, fw["logdec"], "", r"\delta",
+           note="Complex eigenvalues of the equation of motion at MCS")
+    st("FCSR (rigid supports)", r"\mathbf{K}\,\boldsymbol\phi = \omega^2\mathbf{M}\,\boldsymbol\phi\ \ (k_b \to \infty)", {}, n1r, "rpm", "N_{c1}",
+       note="Lowest undamped mode with the bearings replaced by very stiff supports (1e12 N/m)")
+    st("CSR", r"CSR = N_{mc} / N_{c1}", {"N_{mc}": (n_mcs, "rpm"), "N_{c1}": (n1r, "rpm")}, n_mcs / n1r, "", "CSR")
+    avl = amplitude_limit_um(n_mcs, cr.amplitude_limit_um_cap)
+    st("Avl", r"A_{vl} = \min\!\left(25.4\sqrt{12000/N_{mc}},\ A_{cap}\right)", {"N_{mc}": (n_mcs, "rpm"), "A_{cap}": (cr.amplitude_limit_um_cap, "µm")},
+       avl, "µm pk-pk", "A_{vl}")
+    rows = s2["qa_table"]
+    for i, r in enumerate(rows):
+        st("qA kN/mm", r"q_A = \frac{P_s\,B_c\,C}{D_c\,H_c\,N_r}\,\frac{\rho_d}{\rho_s}", {"P_s": (r["power_kw"], "kW"), "B_c": BC, "C": C_API, "D_c": (r["dc_mm"], "mm"),
+           "H_c": (r["hc_mm"], "mm"), "N_r": (N, "rpm"), r"\rho_d": (r["rho_d"], "kg/m³"), r"\rho_s": (r["rho_s"], "kg/m³")}, r["qa_kn_mm"], "kN/mm", "q_A", row=i)
+    st("QA (Σ qA)", r"Q_A = \sum q_A", {"q_A": f"{len(rows)} impellers"}, s2["qa_total_kn_mm"], "kN/mm", "Q_A",
+       note="Applied as a cross-coupled stiffness at mid-span between the bearings")
+    if rows:
+        st("Avg gas density", r"\bar\rho = \mathrm{mean}\,\tfrac{1}{2}(\rho_s + \rho_d)", {r"\rho_s": (rows[0]["rho_s"], "kg/m³"), r"\rho_d": (rows[-1]["rho_d"], "kg/m³")},
+           s2["avg_gas_density_kg_m3"], "kg/m³", r"\bar\rho")
+    for i, r in enumerate(s2["level1"]):
+        st("Q0 kN/mm", r"\delta_1(Q_0) = 0", {"Q_A": (r["qa_kn_mm"], "kN/mm")}, r["q0_kn_mm"], "kN/mm", "Q_0", row=i,
+           note=f"{r['label']}: cross-coupling raised until the first forward mode loses all damping (doubling, then bisection to 0.2 %)")
+        st("Q0/QA", r"Q_0 / Q_A", {"Q_0": (r["q0_kn_mm"], "kN/mm"), "Q_A": (r["qa_kn_mm"], "kN/mm")}, r["q0_over_qa"] if r["q0_over_qa"] is not None else "–", "", row=i)
+        st("δA", r"\delta_A = \delta_1(Q_A)", {"Q_A": (r["qa_kn_mm"], "kN/mm")}, r["delta_a"], "", r"\delta_A", row=i,
+           note="Log decrement of the first forward mode at MCS with Q_A at mid-span")
+        st("Region", r"\text{B if } CSR > CSR_{AB}(\bar\rho)\ \text{else A}", {"CSR": s2.get("csr") or 0.0, r"\bar\rho": (s2["avg_gas_density_kg_m3"], "kg/m³")},
+           r["region"], "", row=i, note=f"Boundary CSR {r['boundary_csr']:.2f} read from the screening chart")
+    for i, r in enumerate(s2["level2"]):
+        st("Rotor + bearings δb", r"\delta_b = \frac{2\pi\zeta}{\sqrt{1-\zeta^2}}", {"f_d": (r["freq_b_cpm"], "cpm")}, r["delta_b"], "", r"\delta_b", row=i,
+           note=f"{r['label']}: first forward mode at MCS, bearings only")
+        for k in ("min", "max"):
+            if f"delta_f_{k}_seal" in r:
+                st(f"+ seals, {k} seal clr δf", r"\delta_f = \delta_1(\text{bearings} + \text{seals})", {"f_d": (r[f"freq_f_{k}_seal_cpm"], "cpm")},
+                   r[f"delta_f_{k}_seal"], "", r"\delta_f", row=i, note=f"Eye-seal and balance-piston coefficients at {k} seal clearance (bulk-flow estimate)")
+    if s2["level2"]:
+        dmin = min(r["delta_f"] for r in s2["level2"])
+        st("Min δf (Level II)", r"\delta_f = \min_{\text{cases}}\,\delta_f \;>\; \delta_{min}", {r"\delta_{min}": s2["logdec_min_api"]}, dmin, "", r"\delta_f")
+    if not v2:
+        return
+    c0 = v2[0]
+    k = 0
+    for u in c0["unbalance"]:
+        for ub in u["unbalances"]:
+            if u["case"] == 3 and "coupling" in ub["basis"].lower():
+                st("Unbalance g·mm", r"U_c = 2\max\!\left(\frac{63500\,W_c}{N_{mc}},\ 12.7\,W_c,\ 72\right)", {"W_c": (ub["W_kg"], "kg"), "N_{mc}": (n_mcs, "rpm")},
+                   ub["g_mm"], "g·mm", "U_c", row=k, note=f"{c0['label']}: coupling unbalance at the overhang")
+            else:
+                ku = UR_K_LOW if n_mcs < 25000 else UR_K_HIGH
+                st("Unbalance g·mm", r"U_a = 2\,U_r = 2\,\frac{K_u\,W}{N_{mc}}", {"K_u": ku, "W": (ub["W_kg"], "kg"), "N_{mc}": (n_mcs, "rpm")}, ub["g_mm"], "g·mm",
+                   "U_a", row=k, note=f"{c0['label']}, {u['label']}: placed at the mode-shape maximum")
+            k += 1
+    k = 0
+    for u in c0["unbalance"]:
+        for c in u["criticals"]:
+            af = c["af"]
+            if af is None:
+                st("AF", "AF", {}, "N/A", "", "AF", row=k, note="Peak not resolved: no amplification factor")
+            elif c["af_method"] == "half-power" and c.get("n1_rpm") and c.get("n2_rpm"):
+                st("AF", r"AF = \frac{N_c}{N_2 - N_1}", {"N_c": (c["speed_rpm"], "rpm"), "N_1": (c["n1_rpm"], "rpm"), "N_2": (c["n2_rpm"], "rpm")}, af, "", "AF",
+                   row=k, note=f"{c0['label']}, case {u['case']}, {c['location']}: half-power points (peak / √2) on a fine sweep")
+            else:
+                st("AF", r"AF = \frac{1}{2\zeta}", {r"\zeta": 1 / (2 * af)}, af, "", "AF", row=k, note="Half-power points overlap: damping of the nearest forward mode used")
+            st("Critical rpm", r"N_c = \arg\max A(N)", {}, c["speed_rpm"], "rpm", "N_c", row=k, note="Response peak at the bearing probe, refined on a ±15 % sweep of 91 speeds")
+            nc, sm = c["speed_rpm"], c["sm_actual_pct"]
+            if nc < n_min:
+                st("SM actual %", r"SM = 100\,\frac{N_{min} - N_c}{N_{min}}", {"N_{min}": (n_min, "rpm"), "N_c": (nc, "rpm")}, sm, "%", "SM", row=k)
+            elif nc > n_mcs:
+                st("SM actual %", r"SM = 100\,\frac{N_c - N_{mc}}{N_{mc}}", {"N_{mc}": (n_mcs, "rpm"), "N_c": (nc, "rpm")}, sm, "%", "SM", row=k)
+            else:
+                st("SM actual %", "SM = 0", {"N_c": (nc, "rpm")}, sm, "%", "SM", row=k, note="Critical inside the operating speed range")
+            if c["sm_required_pct"] is None:
+                st("SM required %", r"AF < 2.5", {"AF": af if af is not None else "N/A"}, "No need", "", "SM_{req}", row=k, note="Well damped: no margin needed")
+            elif nc > n_mcs:
+                st("SM required %", r"SM_{req} = \min\!\left(26,\ 10 + 17\left(1 - \frac{1}{AF - 1.5}\right)\right)", {"AF": af}, c["sm_required_pct"], "%", "SM_{req}", row=k)
+            else:
+                st("SM required %", r"SM_{req} = \min\!\left(16,\ 17\left(1 - \frac{1}{AF - 1.5}\right)\right)", {"AF": af}, c["sm_required_pct"], "%", "SM_{req}", row=k)
+            k += 1
+    u0 = c0["unbalance"][0]
+    st("Amax", r"A_{max} = \max_{N_{min} \le N \le N_{mc}} A_{probe}(N)", {"N_{min}": (n_min, "rpm"), "N_{mc}": (n_mcs, "rpm")}, u0["amax_um"], "µm pk-pk", "A_{max}",
+       note=f"{c0['label']}, case {u0['case']}")
+    st("Scc", r"S_{cc} = \min\!\left(6,\ A_{vl}/A_{max}\right)", {"A_{vl}": (u0["avl_um"], "µm"), "A_{max}": (u0["amax_um"], "µm")}, u0["scc"], "", "S_{cc}")
+    for i, s in enumerate(u0["clearance"]):
+        st("Max Ap µm", r"A_p = \max_{N \le N_{tr}} A(N)", {"N_{tr}": (n_trip, "rpm")}, s["ap_um"], "µm", "A_p", row=i, note=s["label"])
+        st("Corrected µm", r"A_s = S_{cc}\,A_p", {"S_{cc}": u0["scc"], "A_p": (s["ap_um"], "µm")}, s["corrected_um"], "µm", "A_s", row=i)
+        st("75 % clearance µm", r"0.75\,c_d", {"c_d": (s["diametral_clearance_um"], "µm")}, s["limit_um"], "µm", row=i)
+    st("Overall", r"\text{all checks met}", {}, "pass" if all(i["pass"] or "Level I" in i["item"] for i in concl) else "review", "",
+       note="Separation margins, clearances and Level II stability; a Level I fail only calls for Level II")
+
 
 
 def _signed_major(x: np.ndarray, y: np.ndarray) -> np.ndarray:

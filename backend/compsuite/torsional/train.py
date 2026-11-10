@@ -493,5 +493,113 @@ def torsional_analysis(project, train: Train, sizing: dict, shaft_material: dict
         sync = 120 * tr.line_frequency_hz / tr.motor_poles * info["gear_ratio"]
         out["startup"] = startup_transient(train, T_rated, sync, tr.line_frequency_hz, tr.motor_poles, tr.modal_damping_ratio)
         rec.assumptions.append("Synchronous motor start: 1.2 Tr average + 0.5 Tr pulsating at 2 x slip frequency")
+    _steps(rec, train, meta, info, res, components, tr, s, N)
     out["trace"] = rec
     return out
+
+
+def _steps(rec, train, meta, info, res, components, tr, s, N) -> None:
+    rec.sym(**{"M_r": ("Rated torque", "N·m"), "P": ("Rated power", "kW"), "N": ("Shaft speed", "rpm"), "I_p": ("Polar mass moment of inertia", "kg·m²"),
+               r"\rho": ("Material density", "kg/m³"), "D": ("Outer diameter", "m"), "d": ("Inner diameter", "m"), "L": ("Element length", "m"),
+               r"I_{add}": ("Added inertia (impellers, discs, cores)", "kg·m²"), "k": ("Torsional stiffness of one element", "N·m/rad"),
+               "K_r": ("Torsional stiffness of the rotor (elements in series)", "N·m/rad"), "G": ("Shear modulus", "Pa"), "n_e": ("Number of shaft elements", "-"),
+               "K_c": ("Coupling torsional stiffness", "N·m/rad"), "T_c": ("Rated torque at the coupling", "N·m"), "p_f": ("Shaft penetration factor", "-"),
+               "T_{max}": ("Coupling maximum transient torque", "N·m"), "T_{alt}": ("Coupling allowable alternating torque", "N·m"),
+               "k_m": ("Linear gear mesh stiffness", "N/m"), "r_b": ("Base radius", "m"), "k_t": ("Torsional mesh stiffness", "N·m/rad"),
+               r"\mathbf{K}": ("Stiffness matrix referred to compressor speed", "N·m/rad"), r"\mathbf{J}": ("Inertia matrix referred to compressor speed", "kg·m²"),
+               r"\boldsymbol\phi": ("Mode shape", "-"), r"\omega": ("Natural frequency", "rad/s"), "n": ("Speed ratio to the compressor", "-"),
+               "n_s": ("Number of stations", "-"), "f_n": ("Torsional natural frequency", "cpm"), "f_e": ("Excitation frequency at rated speed", "cpm"),
+               "SM": ("Separation margin", "%"), "E_s": ("Strain energy of an element", "J"), r"\theta": ("Twist across an element", "rad"),
+               "S": ("Share of modal strain energy in a shaft line", "-"), r"\tau_e": ("Endurance shear stress with factors", "MPa"),
+               "S_e": ("Material endurance limit", "MPa"), "C_s": ("Surface factor", "-"), "C_z": ("Size factor", "-"), "K_t": ("Stress concentration factor", "-"),
+               r"\tau_u": ("Ultimate shear stress", "MPa"), r"\sigma_u": ("Tensile strength", "MPa"), r"\tau_m": ("Mean shear stress from rated torque", "MPa"),
+               "SF": ("Safety factor", "-"), r"\tau_{all}": ("Allowable alternating shear stress", "MPa"), r"\tau_a": ("Alternating shear stress", "MPa"),
+               "T_a": ("Alternating torque", "N·m"), "T_0": ("Exciting torque amplitude", "N·m"), "f_x": ("Exciting torque fraction of rated", "-"),
+               r"\zeta": ("Modal damping ratio", "-"), "T_m": ("Mean torque at the coupling", "N·m"), r"\tau_{tot}": ("Peak shear incl. rated torque", "MPa"),
+               r"\tau_d": ("Dynamic shear stress", "MPa"), "T_{tot}": ("Peak coupling torque incl. rated torque", "N·m"),
+               "M(t)": ("Air-gap torque during the short circuit", "N·m"), "M_k": ("Torque term amplitude", "N·m"), r"\alpha_k": ("Decay rate", "1/s"),
+               r"\omega_k": ("Term frequency", "rad/s"), r"\varphi_k": ("Phase", "rad"), "t_{end}": ("Simulated time", "s"), r"\boldsymbol\theta": ("Station twist angles", "rad"),
+               r"\mathbf{C}": ("Damping matrix", "N·m·s/rad"), r"\mathbf{T}": ("Exciting torques", "N·m")})
+    names = {"Ip kg·m²": "Polar inertia", "K MN·m/rad": "Torsional stiffness", "Max transient kN·m": "Coupling maximum transient torque",
+             "Allow. alt. kN·m": "Coupling allowable alternating torque", "Torsional mesh K (bull / pinion)": "Torsional mesh stiffness",
+             "TNF cpm": "Torsional natural frequency", "TNF Hz": "Torsional natural frequency in Hz", "Max shear MPa": "Alternating shear stress",
+             "Allowable MPa": "Allowable alternating shear stress", "SF": "Coupling Goodman safety factor",
+             "Peak incl. rated MPa": "Peak shear stress in the short circuit", "Peak incl. rated kN·m": "Peak coupling torque in the short circuit"}
+
+    def st(label, *a, ui="", **k):
+        return rec.step(names.get(label, label), *a, ui=ui or (label if label in names else ""), **k)
+    for ln, (lab, rpm) in info["lines"].items():
+        st("Rated torque", r"M_r = 9549\,P/N", {"P": (info["rated_power_kw"], "kW"), "N": (rpm, "rpm")}, res["rated_torque_nm"][ln] / 1e3, "kN·m", "M_r", note=lab)
+    rows = [c for c in components if c["kind"] != "mesh"]
+    for i, c in enumerate(rows):
+        r = meta["rotors"][c["name"]]
+        if c["kind"] == "rotor":
+            el = [train.shafts[e] for e in r["elements"]]
+            e0 = el[0] if el else None
+            g = {r"\rho": (r["material"]["density_kg_m3"], "kg/m³"), "n_e": len(el)}
+            if e0:
+                g.update({"D": (e0.diameter, "m"), "d": (e0.inner_diameter, "m"), "L": (e0.length, "m")})
+            st("Ip kg·m²", r"I_p = \sum\left(\rho\,\frac{\pi(D^4 - d^4)}{32}\,L + I_{add}\right)", g, c["ip_kgm2"], "kg·m²", "I_p", row=i,
+               note=f"{c['name']}: sum over {len(el)} elements; values shown for the first element")
+            st("K MN·m/rad", r"K_r = \left(\sum \frac{1}{k}\right)^{-1},\quad k = \frac{G\,\pi(D^4 - d^4)}{32\,L}",
+               {"G": (r["material"]["shear_modulus_pa"], "Pa"), "n_e": len(el)}, (c["stiffness_nm_rad"] or 0) / 1e6, "MN·m/rad", "K_r", row=i)
+        else:
+            T = res["rated_torque_nm"][r["line"]]
+            st("Ip kg·m²", r"I_p = 2.5\times10^{-5}\,(1.5\,T_c)^{0.9}", {"T_c": (T, "N·m")}, c["ip_kgm2"], "kg·m²", "I_p", row=i,
+               note="Vendor value when given; otherwise this estimate, split half to each hub")
+            st("K MN·m/rad", r"\frac{1}{K_c} = \frac{1}{150\,T_c} + \frac{2\,p_f\,D}{G\,\pi D^4/32}", {"T_c": (T, "N·m"), "p_f": tr.coupling_penetration_factor},
+               c["stiffness_nm_rad"] / 1e6, "MN·m/rad", "K_c", row=i, note="Vendor value when given; otherwise this estimate (body in series with the shaft inside the hubs)")
+            st("Max transient kN·m", r"T_{max} = 5\,T_c", {"T_c": (T, "N·m")}, c["max_transient_torque_nm"] / 1e3, "kN·m", "T_{max}", row=i, note="Vendor value when given")
+            st("Allow. alt. kN·m", r"T_{alt} = 0.15\,T_{max}", {"T_{max}": (c["max_transient_torque_nm"], "N·m")}, c["allowable_alternating_torque_nm"] / 1e3,
+               "kN·m", "T_{alt}", row=i, note="Vendor value when given")
+    gear = info.get("gear")
+    if gear:
+        st("Torsional mesh K (bull / pinion)", r"k_t = k_m\,r_b^2", {"k_m": (gear["mesh_stiffness_n_mm"] * 1e3, "N/m"),
+           "r_b": (gear["pinion_pitch_diameter_mm"] / 2e3 * math.cos(math.radians(gear["transverse_pressure_angle_deg"])), "m")},
+           gear["mesh_k_pinion_nm_rad"] / 1e6, "MN·m/rad", "k_t", note=f"Pinion side; bull gear side {gear['mesh_k_bull_nm_rad'] / 1e6:.0f} MN·m/rad")
+    st("Train model", r"\mathbf{J}\,\ddot{\boldsymbol\theta} + \mathbf{C}\,\dot{\boldsymbol\theta} + \mathbf{K}\,\boldsymbol\theta = \mathbf{T},\quad J_i = n^2 I_p,\ k_i = n^2 k",
+       {"n_s": len(train.stations), "n": 1 / info["gear_ratio"]}, len(train.shafts), "elements", note="Every branch referred to compressor speed by its speed ratio squared")
+    for i, m in enumerate(res["modes"]):
+        st("TNF cpm", r"\mathbf{K}\boldsymbol\phi = \omega^2\mathbf{J}\boldsymbol\phi,\quad f_n = \frac{60\,\omega}{2\pi}", {"n_s": len(train.stations)},
+           m["freq_cpm"], "cpm", "f_n", row=i, note="Generalised symmetric eigenproblem; the rigid-body mode at zero is skipped")
+        st("TNF Hz", r"f_n = \frac{\omega}{2\pi}", {r"\omega": (2 * math.pi * m["freq_hz"], "rad/s")}, m["freq_hz"], "Hz", row=i)
+        for k, (lab, _) in info["lines"].items():
+            st(f"Strain energy share, {lab}", r"S = \frac{\sum_{line} E_s}{\sum E_s},\quad E_s = \tfrac{1}{2}\,k\,\theta^2", {}, 100 * m["line_strain_energy"].get(k, 0.0),
+               "%", "S", row=i, note="Gear mesh strain energy is split half to each line", ui=f"SE share {lab}")
+    exc = res["excitations"]
+    for i, row in enumerate(res["separation_table"]):
+        for cell, e in zip(row["cells"], exc):
+            st(f"Separation margin to {e['name']}", r"SM = 100\,\frac{f_n - f_e}{f_e}", {"f_n": (row["freq_cpm"], "cpm"), "f_e": (e["f_rated_cpm"], "cpm")}, cell["margin_pct"], "%", "SM", row=i,
+               note=("Interferes" + (": dangerous, the exciting line holds enough strain energy" if cell["dangerous"] else ": not dangerous")) if cell["interferes"] else "", ui=e["name"])
+    for n, al in res["allowables"].items():
+        mat = meta["rotors"][n]["material"]
+        st(f"Endurance shear stress, {n}", r"\tau_e = 0.577\,S_e\,C_s\,C_z / K_t", {"S_e": (mat["endurance_mpa"], "MPa"), "C_s": s.allow["Cs"], "C_z": s.allow["Cz"],
+           "K_t": s.allow["Kt"]}, al["tau_e_mpa"], "MPa", r"\tau_e")
+    if res["steady_state"]:
+        ss = res["steady_state"][0]
+        st("Exciting torque", r"T_0 = f_x\,M_r", {"f_x": s.steady_frac}, ss["exciting_torque_nm"], "N·m", "T_0",
+           note=f"Mode {ss['mode']} excited at resonance by {ss['excitation']}; modal superposition with damping ratio {s.zeta}")
+        for i, r in enumerate(ss["rotors"]):
+            sh = next(x for x in train.shafts if x.rotor == r["rotor"] and x.kind == "shaft" and x.i + 1 == r["station"])
+            Jp = math.pi * (sh.diameter**4 - sh.inner_diameter**4) / (16 * sh.diameter)
+            st("Max shear MPa", r"\tau_a = \frac{16\,T_a\,D}{\pi(D^4 - d^4)}", {"T_a": (r["max_shear_mpa"] * 1e6 * Jp, "N·m"), "D": (sh.diameter, "m"),
+               "d": (sh.inner_diameter, "m")}, r["max_shear_mpa"], "MPa", r"\tau_a", row=i, note=f"{r['rotor']}, largest element stress at station {r['station']}")
+            al = res["allowables"][r["rotor"]]
+            st("Allowable MPa", r"\tau_{all} = \tau_e\,(1 - \tau_m/\tau_u)/SF,\quad \tau_u = 0.577\,\sigma_u", {r"\tau_e": (al["tau_e_mpa"], "MPa"),
+               r"\tau_m": (r["mean_shear_mpa"], "MPa"), r"\tau_u": (al["tau_u_mpa"], "MPa"), "SF": al["SF"]}, r["allowable_mpa"], "MPa", r"\tau_{all}", row=i)
+        for i, c in enumerate(ss["couplings"]):
+            g = c["goodman"]
+            st("SF", r"SF = \left(\frac{T_m}{T_{max}} + \frac{T_a}{T_{alt}}\right)^{-1}", {"T_m": (g["mean_nm"], "N·m"), "T_a": (c["alt_torque_nm"], "N·m"),
+               "T_{max}": (g["line"][1][0], "N·m"), "T_{alt}": (c["allowable_alt_nm"], "N·m")}, c["sf"], "", "SF", row=i,
+               note=f"{c['coupling']}: modified Goodman line; mean torque {tr.coupling_goodman_mean_factor:g} × rated")
+    for name, v in list(res["short_circuit"].items())[:1]:
+        t = v["terms"][0] if v["terms"] else {"mk_nm": 0, "alpha": 0, "omega": 0, "phi": 0}
+        st("Short-circuit response", r"M(t) = \sum M_k\,e^{-\alpha_k t}\sin(\omega_k t + \varphi_k)", {"M_k": (t["mk_nm"], "N·m"), r"\alpha_k": (t["alpha"], "1/s"),
+           r"\omega_k": (t["omega"], "rad/s"), r"\varphi_k": (t["phi"], "rad"), "t_{end}": (s.sc_duration_s, "s")}, len(v["t_s"]), "time points",
+           note=f"{name}: Newmark (average acceleration) on the elastic modes, time step below 1/20 of the highest kept mode period; first term shown")
+        for i, r in enumerate(v["rotors"]):
+            st("Peak incl. rated MPa", r"\tau_{tot} = \max|\tau_m + \tau_d(t)|", {r"\tau_m": (r["mean_shear_mpa"], "MPa"), r"\tau_d": (r["max_shear_mpa"], "MPa")},
+               r["max_total_shear_mpa"], "MPa", r"\tau_{tot}", row=i, note=f"{r['rotor']}; allowable {r['allowable_mpa']:.1f} MPa = {tr.transient_yield_fraction} Sy/√3")
+        for i, c in enumerate(v["couplings"]):
+            st("Peak incl. rated kN·m", r"T_{tot} = \max|M_r + T_d(t)|", {"T_{max}": (c["allowable_nm"], "N·m")}, c["max_total_torque_nm"] / 1e3, "kN·m", "T_{tot}", row=i,
+               note=c["coupling"])
