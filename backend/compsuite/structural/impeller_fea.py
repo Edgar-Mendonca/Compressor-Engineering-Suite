@@ -121,6 +121,7 @@ def solve(m: dict, E: float, nu: float, rho: float, omega: float, alpha: float =
     fix = int(np.lexsort((X[:, 1], X[:, 0]))[0]) * 2 + 1
     K = K.tolil(); K[fix, :] = 0; K[:, fix] = 0; K[fix, fix] = 1.0; F[fix] = 0.0
     u = spsolve(K.tocsr(), F)
+    resid = float(np.linalg.norm(K.tocsr() @ u - F) / max(np.linalg.norm(F), 1e-30))
     # Centroid stresses.
     out = []
     for e, conn in enumerate(EL):
@@ -138,7 +139,7 @@ def solve(m: dict, E: float, nu: float, rho: float, omega: float, alpha: float =
         vm = math.sqrt(0.5 * ((sr - sz) ** 2 + (sz - st) ** 2 + (st - sr) ** 2) + 3 * trz**2)
         out.append((r, N @ xe[:, 1], sr, sz, st, trz, vm))
     S = np.array(out)
-    return {"u": u.reshape(-1, 2), "stress": S}
+    return {"u": u.reshape(-1, 2), "stress": S, "residual": resid}
 
 
 def _nodal(m: dict, res: dict) -> dict:
@@ -170,7 +171,8 @@ def impeller_fea(impellers: list[dict], stages: list[dict], mat: dict, speeds: d
     Sy = mat["yield_mpa"] * 1e6
     w = speeds["mcs_rpm"] * math.pi / 30
     out = []
-    for imp, st in zip(impellers, stages):
+    _syms(rec)
+    for row, (imp, st) in enumerate(zip(impellers, stages)):
         m = mesh(imp)
         X = m["nodes"]
         dT = (st["T_out_c"] - 20.0) - 20.0 * (m["r_tip"] - X[:, 0]) / (m["r_tip"] - m["r_bore"])
@@ -196,7 +198,55 @@ def impeller_fea(impellers: list[dict], stages: list[dict], mat: dict, speeds: d
                               "blades": imp["blades"], "backsweep_deg": imp["backsweep_deg"],
                               "r_eye_mm": m["r_eye"] * 1e3, "r_tip_mm": m["r_tip"] * 1e3,
                               "cases": {"MCS": _nodal(m, res), "Overspeed 115 %": _nodal(m, os_)}}})
+        _steps(rec, row, out[-1], m, res, os_, solid, dict(E=E, nu=nu, rho=rho, alpha=alpha, Sy=Sy, w=w, T_out=st["T_out_c"], Z=imp["blades"]))
     return {"impellers": out, "trace": rec}
+
+
+def _syms(rec) -> None:
+    rec.sym(**{"K": ("Global stiffness matrix", "N/m"), "u": ("Nodal displacements", "m"), "N": ("Element shape functions", "-"), "F": ("Nodal loads (centrifugal and thermal)", "N"),
+               "B": ("Strain-displacement matrix", "1/m"), "D": ("Elasticity matrix", "Pa"), "r": ("Radius", "m"), "A": ("Element area", "m²"),
+               r"\rho": ("Material density", "kg/m³"), r"\omega": ("Angular speed", "rad/s"), "E": ("Young's modulus", "Pa"), r"\nu": ("Poisson's ratio", "-"),
+               r"\alpha": ("Thermal expansion coefficient", "1/K"), "f": ("Blade fraction of the passage ring", "-"), "Z": ("Number of blades", "-"),
+               "t_b": ("Smeared blade thickness", "m"), r"\Delta T": ("Temperature rise above 20 °C", "K"), "T_2": ("Stage outlet temperature", "°C"),
+               "r_{tip}": ("Tip radius", "m"), "r_{bore}": ("Bore radius", "m"), "r_{eye}": ("Eye radius", "m"), "n_e": ("Number of elements", "-"),
+               "n_n": ("Number of nodes", "-"), r"\varepsilon": ("Relative residual of the solved equations", "-"),
+               r"\sigma_r": ("Radial stress", "Pa"), r"\sigma_z": ("Axial stress", "Pa"), r"\sigma_\theta": ("Hoop stress", "Pa"),
+               r"\tau_{rz}": ("Shear stress", "Pa"), r"\sigma_{vm}": ("von Mises stress", "Pa"), "S_y": ("Yield strength", "Pa"),
+               "u_r": ("Radial displacement", "m"), "u_z": ("Axial displacement", "m"), "U": ("Yield use", "-")})
+
+
+def _steps(rec, row: int, o: dict, m: dict, res: dict, os_: dict, solid, p: dict) -> None:
+    """Document one impeller of the axisymmetric model (values already computed)."""
+    S, So = res["stress"], os_["stress"]
+    ne, nn = o["elements"], o["nodes"]
+    rec.step("Governing equation", r"K\,u = F,\quad K = \sum_e \int_A B^T D\,B\;2\pi r\,dA",
+             {"E": (p["E"], "Pa"), r"\nu": p["nu"], r"\rho": (p["rho"], "kg/m³"), r"\omega": (p["w"], "rad/s")}, 2 * nn, "DOF", "", row,
+             "Static equilibrium of the meridional section; 4-node axisymmetric quads with 2x2 Gauss points, solved once per speed by a direct sparse solver")
+    rec.step("Mesh size", r"n_e,\; n_n", {"n_e": ne, "n_n": nn}, nn, "nodes", "n_n", row,
+             "Structured mesh: bore to tip in r; back plate, passage and shroud layers in z", ui="Mesh")
+    rec.step("Smeared blades", r"f = \min\!\left(1,\ \frac{Z\,t_b}{2\pi r}\right)", {"Z": p["Z"], "t_b": (BLADE_T, "m"), "r": (m["r_tip"], "m")},
+             min(1.0, p["Z"] * BLADE_T / (2 * math.pi * m["r_tip"])), "", "f", row,
+             "Passage elements carry this fraction of the density and stiffness (value shown at the tip)")
+    rec.step("Loads", r"F = \sum_e \int_A N^T \rho f \omega^2 r\;2\pi r\,dA + \sum_e \int_A B^T D\,\alpha\,\Delta T\;2\pi r\,dA",
+             {r"\rho": (p["rho"], "kg/m³"), r"\omega": (p["w"], "rad/s"), r"\alpha": (p["alpha"], "1/K"), "T_2": (p["T_out"], "°C")},
+             p["T_out"] - 20.0, "K", r"\Delta T", row,
+             "Centrifugal body force plus a temperature field: ΔT = T₂ − 20 at the rim, 20 K less at the bore (rim value shown)")
+    rec.step("Force balance (residual)", r"\varepsilon = \frac{\lVert K u - F \rVert}{\lVert F \rVert}", {}, res["residual"], "", r"\varepsilon", row,
+             "Direct solve, no iteration: a residual near machine precision shows the equations are met")
+    for name, ui, SS, om in (("Peak von Mises stress at MCS", "Peak σvm at MCS", S, p["w"]),
+                             ("Peak von Mises stress at 115 % speed", "Peak σvm at 115 %", So, 1.15 * p["w"])):
+        e = int(np.flatnonzero(solid)[np.argmax(SS[solid, 6])])
+        sr, sz, st, trz, vm = SS[e, 2:7]
+        rec.step(name, r"\sigma_{vm} = \sqrt{\tfrac12\left[(\sigma_r-\sigma_z)^2+(\sigma_z-\sigma_\theta)^2+(\sigma_\theta-\sigma_r)^2\right]+3\tau_{rz}^2}",
+                 {r"\omega": (om, "rad/s"), r"\sigma_r": (sr / 1e6, "MPa"), r"\sigma_z": (sz / 1e6, "MPa"), r"\sigma_\theta": (st / 1e6, "MPa"),
+                  r"\tau_{rz}": (trz / 1e6, "MPa")}, vm / 1e6, "MPa", r"\sigma_{vm}", row,
+                 f"Stresses at the centroid of the highest-stressed hub or shroud element (r = {SS[e, 0] * 1e3:.0f} mm); smeared passage left out", ui=ui)
+    rec.step("Yield use", r"U = \sigma_{vm} / S_y", {r"\sigma_{vm}": (o["max_vm_mcs_mpa"], "MPa"), "S_y": (p["Sy"] / 1e6, "MPa")},
+             o["yield_utilisation_mcs"], "", "U", row, f"At 115 %: {o['yield_utilisation_overspeed']:.3f}", ui="Yield use MCS / 115 %")
+    rec.step("Tip radial growth", "u_r(r_{tip})", {"r_{tip}": (m["r_tip"], "m")}, o["tip_radial_growth_um"], "µm", "u_r", row,
+             "Radial displacement of the outermost node at MCS")
+    rec.step("Eye radial growth", r"u_r(r_{eye}),\; u_z(r_{eye})", {"r_{eye}": (m["r_eye"], "m")}, o["eye_radial_growth_um"], "µm", "u_r", row,
+             f"At the shroud eye node; axial shift {o['eye_axial_shift_um']:.1f} µm", ui="Eye growth / axial shift")
 
 
 def calculix_deck(m: dict, E: float, nu: float, rho: float, omega: float, blades: int = 17) -> str:

@@ -482,15 +482,17 @@ def bilinear(eps, E, Sy, Su, elong=0.12):
     return np.where(eps <= ey, E * eps, Sy + Et * (eps - ey))
 
 
-def plastic_solve(sec: Sector, f, Sy, Su, iters=14):
+def plastic_solve(sec: Sector, f, Sy, Su, iters=14, info=None):
     """Secant (deformation theory) elastic-plastic solution: returns u, stresses, element secant moduli, equivalent strain."""
     Es = np.ones(len(sec.els))
-    for _ in range(iters):
+    for it in range(iters):
         u = sec.solve(f, Es)
         eps = sec.strains(u)
         eq = von_mises(np.einsum("ij,egj->egi", sec.D1, eps)).mean(1) / (1 + sec.nu) * 1.0  # equivalent strain (approx.)
         target = bilinear(eq, sec.E, Sy, Su)
         new = np.clip(target / np.maximum(eq * sec.E, 1e-12), 0.02, 1.0)
+        if info is not None:
+            info.update(iterations=it + 1, change=float(np.max(np.abs(new - Es))))
         if np.max(np.abs(new - Es)) < 2e-3:
             Es = new
             break
@@ -651,7 +653,8 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
     # overspeed test: centrifugal + fit at room temperature, elastic-plastic
     wo = os_f * w
     f_os = f_c1 * wo**2 + f_fit1 * p_fit(wo) / 1e6
-    u_os, S_os, Es, eq_os = plastic_solve(sec, f_os, Sy, Su)
+    pinfo: dict = {}
+    u_os, S_os, Es, eq_os = plastic_solve(sec, f_os, Sy, Su, info=pinfo)
     u_el = sec.solve(f_os)
     u_res = u_os - u_el
     eps_pl = np.maximum(eq_os - bilinear(eq_os, E, Sy, Su) / E, 0)
@@ -874,6 +877,11 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
                        f"Temperature: {T_out:.0f} C at the rim, 20 K lower at the bore", f"Shrink fit: radial interference {delta * 1e3:.3f} mm"]}
     validation = {"patch": patch_test(sec), "disc": rotating_disc_check(E, nu, rho, rb, r2, w)}
 
+    _steps(rec, dict(E=E, nu=nu, rho=rho, Sy=Sy, Su=Su, w=w, n_mcs=n_mcs, os_f=os_f, rb=rb, r2=r2, Z=m["Z"], thick=thick, vend=vend,
+                     sec=sec, summary=summary, validation=validation, conv=conv, pinfo=pinfo, delta=delta, g_imp=g_imp, g_shaft=g_shaft,
+                     c_imp=c_imp, c_shaft=c_shaft, w_lift=w_lift, d_ref=d_ref, ur_sh=ur_sh, mc=mc, mode_rows=mode_rows, nds=nds,
+                     sig_th_avg=sig_th_avg, Se=Se, sa=sa, sm=sm, e_hcf=e_hcf, peak_e=peak_e, kt=o["kt"], s_loc=s_loc, eps_loc=eps_loc,
+                     n_lcf=n_lcf, starts=starts, dp_blade=dp_blade, torque=torque, acceptance=acceptance, mesh_mass=mesh_mass))
     faces_v = [m["elements"][e][FACES[n]].tolist() for e, n in faces]
     return {
         "impeller": imp["index"] + 1, "summary": summary,
@@ -893,6 +901,114 @@ def analyse(imp: dict, stage: dict, mat: dict, speeds: dict, opts: dict | None =
         "trace": rec, "_faces": faces,
         "_sector": sec, "_u": {c: f["_u"] for c, f in out_cases.items()}, "_fields": out_cases,
     }
+
+
+def _steps(rec, v: dict) -> None:
+    """Document the 3D analysis with the values already computed in ``analyse``."""
+    s, val, sec = v["summary"], v["validation"], v["sec"]
+    MPa = lambda x: (x / 1e6, "MPa")  # noqa: E731
+    rec.sym(**{"K": ("Sector stiffness matrix", "N/m"), "M": ("Sector mass matrix", "kg"), "u": ("Nodal displacements", "m"), "F": ("Nodal loads", "N"),
+               "T": ("Cyclic-symmetry transformation", "-"), r"\alpha_s": ("Sector angle", "°"), "Z": ("Number of blades", "-"),
+               "n_e": ("Sector elements", "-"), "n_n": ("Sector nodes", "-"), "n_{dof}": ("Degrees of freedom of the sector", "-"),
+               "m_{FE}": ("Mass of the FE model", "kg"), "m_{tgt}": ("Target (vendor) mass", "kg"), "k_t": ("Thickness factor on hub, back plate and shroud", "-"),
+               "E": ("Young's modulus", "Pa"), r"\nu": ("Poisson's ratio", "-"), r"\rho": ("Material density", "kg/m³"), r"\omega": ("Angular speed at MCS", "rad/s"),
+               "r_i": ("Bore radius", "m"), "r_o": ("Tip radius", "m"), r"\sigma_\theta": ("Hoop stress", "Pa"), r"\bar\sigma_\theta": ("Volume-average hoop stress", "Pa"),
+               "u_r": ("Radial displacement", "m"), "e": ("Error", "%"), r"\sigma_{vm}": ("von Mises stress", "Pa"),
+               r"\sigma_1,\sigma_2,\sigma_3": ("Principal stresses", "Pa"), "S_y": ("Yield strength", "Pa"), r"\sigma_{vm,os}": ("von Mises stress at the overspeed test", "Pa"), "S_u": ("Tensile strength (UTS)", "Pa"),
+               "N_{os}": ("Overspeed test speed", "rpm"), "N_{mcs}": ("Maximum continuous speed", "rpm"), "N_b": ("Burst speed", "rpm"),
+               "N_{lift}": ("Fit lift-off speed", "rpm"), r"\delta": ("Radial interference", "m"), "p_{fit}": ("Fit (contact) pressure", "Pa"),
+               "g_i": ("Free bore growth per ω²", "m s²"), "g_s": ("Shaft surface growth per ω²", "m s²"), "c_i": ("Bore compliance under bore pressure", "m/Pa"),
+               "c_s": ("Solid-shaft compliance under surface pressure", "m/Pa"), "E_s": ("Secant modulus factor per element", "-"),
+               r"\Delta E_s": ("Largest change of the secant modulus factor in the last iteration", "-"), r"\varepsilon_{eq}": ("Equivalent strain", "-"),
+               r"u_{ep}": ("Elastic-plastic displacement", "m"), r"u_{el}": ("Elastic displacement under the same load", "m"),
+               r"u_{res}": ("Permanent (residual) displacement", "m"), "L_c": ("Bore length still in contact", "%"), "u_{sh}": ("Shaft surface growth at MCS", "m"),
+               "K_G": ("Stress-stiffening (geometric) matrix", "N/m"), "K_S": ("Spin-softening matrix", "N/m"), r"\phi": ("Mode shape", "-"),
+               "f": ("Natural frequency", "Hz"), "k": ("Nodal diameter", "-"), r"\sigma_a": ("Alternating stress", "Pa"), r"\sigma_m": ("Mean (steady) stress", "Pa"),
+               "S_e": ("Endurance limit (derated)", "Pa"), "SF": ("Goodman safety factor", "-"), "K_t": ("Stress concentration factor", "-"),
+               "N_f": ("Cycles to crack start", "-"), "N_{req}": ("Required start-stop cycles", "-"), r"\Delta p": ("Blade pressure difference", "Pa"),
+               "Q": ("Stage torque", "N m"), "U": ("Yield use", "-")})
+    rec.step("Governing equation", r"T^T (K + K_{pen})\,T\,u_r = T^T F,\quad u = T\,u_r",
+             {"E": MPa(v["E"]), r"\nu": v["nu"], r"\rho": (v["rho"], "kg/m³"), r"\omega": (v["w"], "rad/s"), "Z": v["Z"]}, sec.ndof, "DOF", "n_{dof}",
+             note="Static equilibrium of one blade sector; cyclic symmetry ties the two cut faces, solved directly with a sparse solver (no iteration)")
+    rec.sym(**{"K_{pen}": ("Penalty restraints (axial bore ring, one tangential)", "N/m"), "u_r": ("Reduced (master) displacements", "m")})
+    rec.step("Sector mesh size", r"n_e,\; n_n", {"Z": v["Z"]}, s["elements"], "elements", "n_e",
+             note=f"8-node hexahedra with 2x2x2 Gauss points; {s['nodes']} nodes; full wheel = sector × Z", ui="Sector elements / nodes")
+    rec.step("Degrees of freedom", r"n_{dof} = 3\,n_n", {"n_n": s["nodes"]}, s["dof"], "", "n_{dof}", ui="DOF (sector)")
+    rec.step("Sector angle", r"\alpha_s = 360 / Z", {"Z": v["Z"]}, 360 / v["Z"], "°", r"\alpha_s")
+    tf = v["thick"] if np.isscalar(v["thick"]) else v["thick"][0]
+    rec.step("Thickness factor", r"m_{FE}(k_t) = m_{tgt}", {"m_{tgt}": (v["vend"].get("mass_kg"), "kg")}, tf, "", "k_t",
+             note="Hub, back plate and shroud thickness scaled until the FE mass matches the vendor mass (1 when no vendor data)", ui="Thickness factors")
+    rec.step("Mass of the FE model", r"m_{FE} = \rho \sum_e V_e \cdot Z", {r"\rho": (v["rho"], "kg/m³"), "Z": v["Z"]}, s["fe_mass_kg"], "kg", "m_{FE}", ui="FE mass")
+    rec.sym(**{"V_e": ("Element volume", "m³")})
+    pt = val["patch"]
+    rec.step("Patch test", r"e = \max|\sigma_{FE} - D\,\varepsilon_0| / \max|D\,\varepsilon_0|", {}, pt["constant_strain_error_pct"], "%", "e",
+             note="A linear displacement field must give the exact uniform stress in every element", ui="Constant-strain patch test (impeller mesh)")
+    rec.sym(**{r"\sigma_{FE}": ("Stress from the FE model", "Pa"), "D": ("Elasticity matrix", "Pa"), r"\varepsilon_0": ("Imposed uniform strain", "-")})
+    dc = val["disc"]
+    rec.step("Rotating disc check: bore hoop stress", r"\sigma_\theta(r_i) = \frac{3+\nu}{4}\,\rho\,\omega^2\left(r_o^2 + \frac{1-\nu}{3+\nu}\,r_i^2\right)",
+             {r"\nu": v["nu"], r"\rho": (v["rho"], "kg/m³"), r"\omega": (v["w"], "rad/s"), "r_i": (v["rb"], "m"), "r_o": (v["r2"], "m")},
+             dc["hoop_bore_exact_mpa"], "MPa", r"\sigma_\theta", note=f"FE gives {dc['hoop_bore_fe_mpa']:.1f} MPa ({dc['hoop_error_pct']:+.2f} %) on a thin disc of the same radii", ui="Rotating disc: bore hoop FE / exact")
+    rec.step("Rotating disc check: bore growth", r"u_r(r_i) = r_i\,\sigma_\theta(r_i) / E",
+             {"r_i": (v["rb"], "m"), r"\sigma_\theta": (dc["hoop_bore_exact_mpa"], "MPa"), "E": MPa(v["E"])}, dc["ur_bore_exact_um"], "µm", "u_r",
+             note=f"FE gives {dc['ur_bore_fe_um']:.2f} µm ({dc['ur_error_pct']:+.2f} %)", ui="Rotating disc: bore growth FE / exact")
+    if s.get("convergence_error_pct") is not None:
+        c = v["conv"]
+        rec.step("Mesh convergence", r"e = |\bar\sigma_{\theta,3} - \bar\sigma_{\theta,2}| / |\bar\sigma_{\theta,3}|",
+                 {r"\bar\sigma_{\theta,2}": (c[1]["avg_hoop_mpa"], "MPa"), r"\bar\sigma_{\theta,3}": (c[2]["avg_hoop_mpa"], "MPa")}, s["convergence_error_pct"], "%", "e",
+                 note=f"Centrifugal MCS on coarse / medium / fine meshes: {c[0]['dof']} / {c[1]['dof']} / {c[2]['dof']} DOF", ui="Mesh convergence (average hoop, medium vs fine)")
+        rec.sym(**{r"\bar\sigma_{\theta,2}": ("Average hoop stress, medium mesh", "Pa"), r"\bar\sigma_{\theta,3}": ("Average hoop stress, fine mesh", "Pa")})
+    rec.step("Blade loading", r"\Delta p = \frac{Q}{Z \int r\,b\,dr}", {"Q": (v["torque"], "N m"), "Z": v["Z"]}, v["dp_blade"] / 1e3, "kPa", r"\Delta p",
+             note="Stage torque shared evenly over the blade surface; added to the passage pressure on the pressure side, taken off on the suction side")
+    rec.sym(**{"b": ("Passage width", "m"), "r": ("Radius", "m")})
+    vm = s["peak_vm_mcs_mpa"]
+    rec.step("Peak von Mises stress at MCS", r"\sigma_{vm} = \sqrt{\tfrac12\left[(\sigma_1-\sigma_2)^2+(\sigma_2-\sigma_3)^2+(\sigma_3-\sigma_1)^2\right]}",
+             {r"\omega": (v["w"], "rad/s"), "S_y": MPa(v["Sy"])}, vm, "MPa", r"\sigma_{vm}",
+             note=f"Peak of the nodal field, MCS with fit, gas pressure and temperature; at {s['peak_location_mm']} mm ({s['peak_zone']})", ui="Max σvm @ MCS (yield)")
+    rec.step("Peak hoop stress at MCS", r"\sigma_\theta = \max_{r,z}\,\sigma_\theta(r, z)", {r"\omega": (v["w"], "rad/s")}, s["peak_hoop_mcs_mpa"], "MPa", r"\sigma_\theta",
+             note="Stresses turned to cylindrical axes, MCS combined case", ui="Max hoop @ MCS")
+    rec.step("Overspeed stress, scaled from MCS", r"\sigma_{vm,os} = \sigma_{vm}\,(N_{os}/N_{mcs})^2",
+             {r"\sigma_{vm}": (vm, "MPa"), "N_{os}": (v["os_f"] * v["n_mcs"], "rpm"), "N_{mcs}": (v["n_mcs"], "rpm")}, s["peak_vm_overspeed_scaled_mpa"], "MPa", r"\sigma_{vm}", ui="Max σvm @ overspeed (scaled)")
+    pi = v["pinfo"]
+    rec.step("Overspeed stress, elastic-plastic", r"K(E_s)\,u = F,\quad E_s = \frac{\sigma(\varepsilon_{eq})}{E\,\varepsilon_{eq}}",
+             {"S_y": MPa(v["Sy"]), "S_u": MPa(v["Su"]), "N_{os}": (v["os_f"] * v["n_mcs"], "rpm"), r"\Delta E_s": pi.get("change")}, s["peak_vm_overspeed_mpa"], "MPa", r"\sigma_{vm}",
+             note=f"Secant iteration on a bilinear curve (yield, UTS at 12 % strain), half-step relaxation: {pi.get('iterations')} iterations, "
+                  f"stop when the secant factor changes by less than 0.002; yielded volume {s['plastic_volume_overspeed_pct']:.2f} %", ui="Elastic-plastic FE (bilinear)")
+    rec.step("Permanent bore growth", r"u_{res} = u_{ep} - u_{el}", {}, s["permanent_bore_growth_um"], "µm", r"u_{res}",
+             note=f"Mean over the bore after the overspeed test; eye {s['permanent_eye_growth_um']:.1f} µm, tip {s['permanent_tip_growth_um']:.1f} µm")
+    rec.step("Fit pressure", r"p_{fit}(\omega) = \frac{\delta - (g_i - g_s)\,\omega^2}{c_i + c_s}",
+             {r"\delta": (v["delta"] * 1e3, "mm"), "g_i": (v["g_imp"], "m s²"), "g_s": (v["g_shaft"], "m s²"), "c_i": (v["c_imp"], "m/Pa"), "c_s": (v["c_shaft"], "m/Pa"),
+              r"\omega": (v["w"], "rad/s")}, s["fit_pressure_mcs_mpa"], "MPa", "p_{fit}",
+             note=f"g_i and c_i from unit FE load cases; shaft as a solid cylinder. At standstill {s['fit_pressure_standstill_mpa']:.1f} MPa")
+    rec.step("Fit lift-off speed", r"N_{lift} = N_{mcs}\,\frac{1}{\omega}\sqrt{\frac{\delta}{g_i - g_s}}",
+             {r"\delta": (v["delta"] * 1e3, "mm"), "g_i": (v["g_imp"], "m s²"), "g_s": (v["g_shaft"], "m s²"), r"\omega": (v["w"], "rad/s"), "N_{mcs}": (v["n_mcs"], "rpm")},
+             s["lift_off_rpm"], "rpm", "N_{lift}", note=f"Ratio to MCS {s['lift_off_ratio']:.3f}", ui="Lift-off speed / MCS (≥ 1.15)")
+    rec.step("Max bore radial deformation", r"u_r = \max_z u_r(r_i, z)", {r"\omega": (v["w"], "rad/s")}, s["max_bore_ur_mm"], "mm", "u_r",
+             note="Free impeller, centrifugal load at MCS, ring average at each axial layer of the bore")
+    rec.step("Bore growth against interference", r"u_r \;\text{vs}\; \delta", {r"\delta": (v["d_ref"] * 1e3, "mm")}, s["max_bore_ur_mm"], "mm", "u_r", ui="Bore growth / min interference")
+    rec.step("Bore contact length at MCS", r"L_c = \frac{\text{length where } u_r - u_{sh} \le \delta}{\text{bore length}}",
+             {"u_{sh}": (v["ur_sh"] * 1e3, "mm"), r"\delta": (v["d_ref"] * 1e3, "mm")}, s["contact_length_pct"], "%", "L_c",
+             note="Bore growth relative to the shaft interpolated on 2001 points along the bore", ui="Contact length @ MCS (≥ 50 %)")
+    rec.step("Burst margin", r"N_b = N_{mcs}\sqrt{0.9\,S_u / \bar\sigma_\theta}",
+             {"N_{mcs}": (v["n_mcs"], "rpm"), "S_u": MPa(v["Su"]), r"\bar\sigma_\theta": MPa(v["sig_th_avg"])}, s["burst_margin"], "", "N_b",
+             note=f"Burst speed {s['burst_speed_rpm']:.0f} rpm; margin = N_b / N_mcs", ui="Burst margin (average hoop)")
+    e = v["e_hcf"]
+    rec.step("Goodman safety factor", r"SF = \left(\frac{\sigma_a}{S_e} + \frac{\sigma_m}{S_u}\right)^{-1}",
+             {r"\sigma_a": MPa(v["sa"][e]), "S_e": MPa(v["Se"]), r"\sigma_m": MPa(v["sm"][e]), "S_u": MPa(v["Su"])}, s["goodman_sf_min"], "", "SF",
+             note=f"Lowest over all elements ({s['goodman_zone']}); alternating stress a set fraction of the steady stress, × 3 at a SAFE interference", ui="Goodman safety factor (HCF)")
+    rec.step("Low-cycle fatigue life ratio", r"\sigma\,\varepsilon = (K_t\,\sigma_{vm})^2/E,\quad N_f \text{ from } \Delta\varepsilon(N_f)",
+             {"K_t": v["kt"], r"\sigma_{vm}": MPa(v["sm"][v["peak_e"]]), "E": MPa(v["E"]), "S_u": MPa(v["Su"]), "N_{req}": v["starts"]}, s["lcf_ratio"], "", "N_f",
+             note=f"Local strain {v['eps_loc']:.5f} by the Neuber rule, life {v['n_lcf']:.3g} cycles by universal slopes; ratio to the required starts", ui="LCF life / required starts")
+    rec.sym(**{r"\sigma": ("Local stress", "Pa"), r"\varepsilon": ("Local strain", "-"), r"\Delta\varepsilon": ("Strain range", "-")})
+    mr = v["mode_rows"]
+    if mr:
+        rec.step("Modes with stress stiffening", r"\left[T_k^H (K + K_G + K_S) T_k - (2\pi f)^2\,T_k^H M T_k\right]\phi = 0",
+                 {r"\omega": (v["w"], "rad/s"), "k": (f"0–{max(v['nds'])}", "")}, min(r_["f_mcs_hz"] for r_ in mr), "Hz", "f",
+                 note=f"Shift-invert eigen solver per nodal diameter, {len(mr)} modes; K_G from the MCS centrifugal stress; lowest frequency at MCS shown")
+        rec.sym(**{"T_k": ("Cyclic transformation for nodal diameter k", "-")})
+    ok = all(a["status"] == "pass" for a in v["acceptance"])
+    npass = sum(a["status"] == "pass" for a in v["acceptance"])
+    rec.step("Verdict", r"\text{all acceptance criteria pass}", {}, "Qualified" if ok else "Not qualified", "",
+             note=f"{npass} of {len(v['acceptance'])} acceptance criteria pass; every row must pass")
 
 
 def summary_row(res: dict) -> dict:

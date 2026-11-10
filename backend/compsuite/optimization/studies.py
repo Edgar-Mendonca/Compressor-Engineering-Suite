@@ -98,6 +98,13 @@ def parametric_study(project: Project, variable: str, values: list[float], metri
     rows = []
     for v in values:
         rows.append({"value": v, **evaluate(set_path(project, variable, v), metrics, level)})
+    rec.sym(**{"x": (f"Design variable {variable}", ""), "M": ("Metric from the full workflow run", "")})
+    rec.step("Parametric sweep", r"M_k = M(x_k),\quad k = 1 \ldots n", {"n": len(values)}, len(rows), "runs", note="One full workflow run per value; other inputs held fixed")
+    rec.sym(**{"n": ("Number of values", "-"), "M_k": ("Metric at value k", ""), "x_k": ("Value k of the variable", "")})
+    for i, r in enumerate(rows):
+        for m in metrics:
+            rec.step(f"{m} at {variable} = {r['value']}", "M = M(x)", {"x": r["value"]}, r.get(m), "", "M", i, ui=m,
+                     note="" if r.get("ok") else f"Run failed: {r.get('error', '')}"[:200])
     return {"variable": variable, "metrics": metrics, "rows": rows, "trace": rec}
 
 
@@ -106,6 +113,8 @@ def sensitivity(project: Project, variables: list[str], metrics: list[str], rel_
     rec = record("optimization.sensitivity", "Normalised central differences", [variables, metrics, rel_step])
     base = evaluate(project, metrics, level)
     table = []
+    rec.sym(**{"S": ("Normalised sensitivity: % change of metric per % change of variable", "-"), "x_0": ("Base value of the variable", ""),
+               "h": ("Step (rel_step × |x₀|)", ""), "M_0": ("Metric at the base design", ""), "M_+": ("Metric at x₀ + h", ""), "M_-": ("Metric at x₀ − h", "")})
     for var in variables:
         x0 = get_path(project, var)
         if x0 is None:
@@ -120,6 +129,9 @@ def sensitivity(project: Project, variables: list[str], metrics: list[str], rel_
                 row[m] = None
             else:
                 row[m] = (up[m] - dn[m]) / (2 * h) * x0 / base[m]
+            rec.step(f"Sensitivity of {m} to {var}", r"S = \frac{M_+ - M_-}{2h}\cdot\frac{x_0}{M_0}",
+                     {"x_0": x0, "h": h, "M_+": up[m], "M_-": dn[m], "M_0": base[m]}, row[m], "", "S", len(table), ui=m,
+                     note="Central difference: two extra workflow runs per variable")
         table.append(row)
     return {"base": base, "sensitivities": table, "metrics": metrics, "trace": rec}
 
@@ -183,6 +195,21 @@ def optimize(project: Project, variables: list[dict], objective: str, sense: str
                    for c in constraints)
     if not feasible:
         rec.warn("Optimum does not satisfy all constraints")
+    rec.sym(**{"u": ("Variables scaled to 0…1 between their bounds", "-"), "x": ("Design variables", ""), "f": ("Objective metric", ""),
+               "g_j": ("Constraint j, scaled (≥ 0 when met)", "-"), "n_x": ("Number of variables", "-"), "N_{max}": ("Largest number of iterations", "-"),
+               r"\rho_0": ("Starting trust-region radius", "-"), "N_e": ("Workflow runs made", "-"), "M_j": ("Constrained metric j", ""), "L_j": ("Limit of constraint j", "")})
+    rec.step("Optimisation method", r"\max_u f(x(u)) \;\text{s.t.}\; g_j(u) \ge 0,\ 0 \le u \le 1,\quad x = x_{lo} + u\,(x_{hi} - x_{lo})",
+             {"n_x": len(variables), "N_{max}": max_evals, r"\rho_0": 0.25}, len(history), "runs", "N_e",
+             note=f"COBYLA (linear models in a shrinking trust region, no gradients), full workflow in the loop; solver message: {sol.message}")
+    rec.sym(**{"x_{lo}": ("Lower bounds", ""), "x_{hi}": ("Upper bounds", "")})
+    for c in constraints:
+        val = best.get(c["metric"])
+        rec.step(f"Constraint {c['metric']} {c['op']} {c['value']}", r"g_j = \frac{M_j - L_j}{|L_j|}" if c["op"] == ">=" else r"g_j = \frac{L_j - M_j}{|L_j|}",
+                 {"M_j": val, "L_j": c["value"]}, None if val is None else ((val - c["value"]) if c["op"] == ">=" else (c["value"] - val)) / max(abs(c["value"]), 1e-9),
+                 "", "g_j", note="Met when g ≥ 0" + ("" if feasible else "; the best point found breaks at least one constraint"))
+    rec.step("Best design", f"f = {objective}(x^*)", {f"x_{{{i + 1}}}": float(xv) for i, xv in enumerate(best_x)}, best.get(objective), "", "f",
+             note=f"{'Feasible' if feasible else 'Not feasible'}; " + ", ".join(f"x_{i + 1} = {v['path']}" for i, v in enumerate(variables)), ui=objective)
+    rec.sym(**{f"x_{{{i + 1}}}": (v["path"], "") for i, v in enumerate(variables)}, **{"x^*": ("Best design variables", "")})
     return {"objective": objective, "sense": sense, "best": {"x": dict(zip([v["path"] for v in variables], map(float, best_x))), **best},
             "feasible": feasible, "evaluations": len(history), "history": history, "message": str(sol.message), "trace": rec}
 

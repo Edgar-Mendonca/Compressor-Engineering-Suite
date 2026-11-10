@@ -119,6 +119,7 @@ export function OptimizePage(c: Ctx) {
             layout={{ xaxis: { title: variable }, yaxis: { title: obj }, margin: { t: 10 } }} />}
         </div>
       </div>
+      {[study, sens, opt].map((x, i) => x?.trace && <Trace key={i} trace={x.trace} />)}
     </>
   );
 }

@@ -21,6 +21,8 @@ import zipfile
 
 import numpy as np
 
+from compsuite.core.trace import record
+
 RU = 8314.462618
 
 
@@ -73,7 +75,8 @@ def meridional(imp: dict, gas: dict, ns: int = 9, iters: int = 40) -> dict:
     kw = np.c_[wall_k(hub), wall_k(shr)]
     Lq = np.hypot(d[:, 0], d[:, 1])
     out = {}
-    for _ in range(iters):
+    mflow = np.zeros(nq)
+    for it in range(iters):
         P = hub[:, None, :] + q[:, :, None] * d[:, None, :]          # (nq, ns, 2): r, z
         # curvature: interpolated between the hub and shroud wall curvatures (stable form), signed positive when the
         # centre of curvature lies toward the shroud; QO-to-streamline angle from the current streamlines
@@ -111,7 +114,7 @@ def meridional(imp: dict, gas: dict, ns: int = 9, iters: int = 40) -> dict:
                     lo = mid
                 else:
                     hi = mid
-            _, Wm[i], rho[i], Tst[i], pst[i] = mass(0.5 * (lo + hi))
+            mflow[i], Wm[i], rho[i], Tst[i], pst[i] = mass(0.5 * (lo + hi))
         # re-place the streamlines at equal mass fractions
         qn = np.zeros_like(q)
         for i in range(nq):
@@ -119,7 +122,8 @@ def meridional(imp: dict, gas: dict, ns: int = 9, iters: int = 40) -> dict:
             cm_ = np.concatenate([[0], np.cumsum(0.5 * (f[1:] + f[:-1]) * np.diff(q[i]))])
             cm_ /= cm_[-1] or 1
             qn[i] = np.interp(np.linspace(0, 1, ns), cm_, q[i])
-        if np.max(np.abs(qn - q)) < 1e-5:
+        dq = float(np.max(np.abs(qn - q)))
+        if dq < 1e-5:
             break
         q = 0.6 * q + 0.4 * qn
     r = P[..., 0]
@@ -133,6 +137,7 @@ def meridional(imp: dict, gas: dict, ns: int = 9, iters: int = 40) -> dict:
            "T_c": Tst - 273.15, "beta_deg": np.degrees(np.arctan2(Wm, Wu)), "alpha_deg": np.degrees(np.arctan2(Wm, cu + 1e-9)), "rcu": np.repeat(rcu[:, None], ns, 1)}
     res = {k_: np.round(v, 4).tolist() for k_, v in out.items()}
     res.update(region=reg, i_le=i0, i_te=i1, hub_mm=(hub * 1e3).round(3).tolist(), shroud_mm=(shr * 1e3).round(3).tolist(), U2=U2, rpm=imp["rpm"])
+    res.update(iterations=it + 1, residual=dq, mass_error_pct=float(np.max(np.abs(mflow / gas["mdot"] - 1)) * 100), grid=[nq, ns])
     res["_raw"] = {**out, "r": r, "z": P[..., 1]}
     return res
 
@@ -250,11 +255,12 @@ def cascade(alpha_in_deg: float, solidity: float = 1.3, n: int = 30, n_lines: in
     A = u * nx[:, None] + v * ny[:, None]
     V1 = np.array([1.0, math.tan(g1)])
     vy2 = 0.0
-    for _ in range(30):
+    for it in range(30):
         Vm = np.array([1.0, 0.5 * (V1[1] + vy2)])
         G = np.linalg.solve(A, -(Vm[0] * nx + Vm[1] * ny))
         vy2_new = V1[1] + G.sum() / s
-        if abs(vy2_new - vy2) < 1e-7:
+        dv = abs(vy2_new - vy2)
+        if dv < 1e-7:
             break
         vy2 = 0.5 * vy2 + 0.5 * vy2_new
     Vmag = math.hypot(*Vm)
@@ -280,7 +286,8 @@ def cascade(alpha_in_deg: float, solidity: float = 1.3, n: int = 30, n_lines: in
     exit_deg = math.degrees(math.atan(vy2))
     return {"camber": [[round(float(a), 4), round(float(b), 4)] for a, b in zip(xs, ys)], "pitch": s, "x_load": xc.round(4).tolist(), "dcp": dcp.round(4).tolist(),
             "inlet_flow_deg": math.degrees(g1), "exit_flow_deg": exit_deg, "deviation_deg": exit_deg, "turning_deg": math.degrees(g1) - exit_deg,
-            "zweifel": float(2 * s * math.cos(math.atan(vy2)) ** 2 * abs(math.tan(g1) - vy2)), "streamlines": lines, "solidity": solidity}
+            "zweifel": float(2 * s * math.cos(math.atan(vy2)) ** 2 * abs(math.tan(g1) - vy2)), "streamlines": lines, "solidity": solidity,
+            "panels": n, "iterations": it + 1, "residual": dv, "circulation": float(G.sum())}
 
 
 def analyse(imp: dict, stage: dict, suction: dict) -> dict:
@@ -295,10 +302,88 @@ def analyse(imp: dict, stage: dict, suction: dict) -> dict:
               ("Max relative Mach number < 0.9", float(np.max(mer["_raw"]["Mrel"])), float(np.max(mer["_raw"]["Mrel"])) < 0.9),
               ("Diffuser inlet angle above stall angle at design", st["alpha2_deg"], st["alpha2_deg"] > st["stall"]["alpha_crit_deg"]),
               ("Rotating-stall onset at or below 75 % of design flow", st["stall"]["stall_q_frac"], (st["stall"]["stall_q_frac"] or 0) <= 0.75)]
+    rec = record("aero.cfdlite", "Streamline curvature (meridional), Stanitz blade loading, 1-D vaneless diffuser, cascade panel method",
+                 [imp.get("index"), stage, suction], assumptions=["Inviscid core flow with blade blockage 0.92 in the impeller; efficiency sets the total-pressure rise",
+                                                                  "Gas properties (Z, cp, k) held at the suction state", "Swirl r cu rises smoothly from leading to trailing edge"])
+    _steps(rec, imp, gas, mer, b2b, st, cas, (stage["P_out_bara"] - stage["P_in_bara"]) * 1e5)
     mer.pop("_raw")
-    return {"impeller": imp["index"] + 1, "meridional": mer, "blade_to_blade": b2b, "stator": st, "cascade": cas, "gas": gas,
+    return {"impeller": imp["index"] + 1, "meridional": mer, "blade_to_blade": b2b, "stator": st, "cascade": cas, "gas": gas, "trace": rec,
             "checks": [{"check": a, "value": b if isinstance(b, str) else round(float(b), 3) if b is not None else None, "status": "pass" if c else "review"}
                        for a, b, c in checks]}
+
+
+def _steps(rec, imp: dict, gas: dict, mer: dict, b2b: dict, st: dict, cas: dict, dp: float) -> None:
+    """Document the four solvers with the values already computed."""
+    raw = mer["_raw"]
+    rec.sym(**{"W_m": ("Meridional velocity", "m/s"), r"\kappa_n": ("Streamline curvature seen along the quasi-orthogonal", "1/m"), "n": ("Distance along the quasi-orthogonal", "m"),
+               r"\dot m": ("Mass flow", "kg/s"), r"\rho": ("Static density", "kg/m³"), "r": ("Radius", "m"), "B": ("Blade blockage factor", "-"),
+               r"\psi": ("Angle between quasi-orthogonal and streamline", "rad"), "N_{qo}": ("Quasi-orthogonals (stations)", "-"), "N_s": ("Streamlines", "-"),
+               r"\Delta q": ("Largest streamline shift in the last pass", "-"), r"e_m": ("Largest mass-flow error over all stations", "%"),
+               "W": ("Relative velocity", "m/s"), "W_{ss}": ("Suction-side relative velocity", "m/s"), "W_{ps}": ("Pressure-side relative velocity", "m/s"),
+               "W_2": ("Relative velocity at the impeller exit", "m/s"), "Z_b": ("Number of blades", "-"), "c_u": ("Swirl velocity", "m/s"), "m": ("Meridional distance", "m"),
+               "DR": ("Diffusion ratio", "-"), "M_{rel}": ("Relative Mach number", "-"), "a": ("Speed of sound", "m/s"), "Z": ("Compressibility factor", "-"),
+               "k": ("Isentropic exponent", "-"), "R": ("Specific gas constant", "J/(kg K)"), "T": ("Static temperature", "K"),
+               "A_{th}": ("Inducer throat area", "m²"), "A^*": ("Sonic (choke) area at the inlet relative Mach number", "m²"), "A_1": ("Inlet flow area normal to W", "m²"),
+               "M_1": ("Inlet relative Mach number (mean)", "-"), "CM": ("Choke margin", "-"), r"\alpha": ("Flow angle from tangential", "°"),
+               r"\alpha_c": ("Critical (stall) inlet angle", "°"), "b": ("Diffuser width", "m"), "r_2": ("Impeller tip radius", "m"), "C": ("Absolute velocity", "m/s"),
+               "c_m": ("Meridional velocity in the diffuser", "m/s"), "c_f": ("Wall friction coefficient", "-"), "p_0": ("Total pressure", "Pa"), "p": ("Static pressure", "Pa"),
+               r"C_p": ("Static pressure recovery", "-"), r"\zeta": ("Total-pressure loss coefficient", "-"), "q": ("Flow as a fraction of design", "-"),
+               "F_r": ("Volute radial force", "N"), r"\Delta p": ("Stage static pressure rise", "Pa"), "D_2": ("Impeller diameter", "m"),
+               r"\Gamma_j": ("Strength of panel vortex j", "m²/s"), "s": ("Pitch / chord", "-"), r"\sigma": ("Solidity (chord / pitch)", "-"),
+               "N_p": ("Panels", "-"), r"V_{y2}": ("Exit tangential velocity / axial velocity", "-"), r"\Delta V_y": ("Change of exit velocity in the last pass", "-"),
+               r"\alpha_2": ("Cascade exit flow angle", "°"), r"\alpha_1": ("Cascade inlet flow angle", "°"), r"\Delta C_p": ("Vane loading", "-")})
+    nq, ns = mer["grid"]
+    rec.step("Governing equations (meridional)", r"\frac{dW_m}{dn} = \kappa_n\,W_m,\qquad \dot m = \int_0^{L} \rho\,W_m \sin\psi\;2\pi r\,B\;dn",
+             {r"\dot m": (gas["mdot"], "kg/s"), "B": 0.92, "N_{qo}": nq, "N_s": ns}, nq * ns, "grid points", note=
+             "Streamline curvature: velocity across each station from the curvature equation, its level by bisection until continuity holds")
+    rec.step("Convergence (meridional)", r"\Delta q = \max|q_{new} - q| < 10^{-5}", {"N_{qo}": nq, "N_s": ns}, mer["residual"], "", r"\Delta q",
+             note=f"{mer['iterations']} passes; streamlines moved to equal mass fractions with 0.4 relaxation")
+    rec.sym(**{"q": ("Streamline position as a fraction of the passage width", "-"), "q_{new}": ("Position at equal mass fractions", "-"), "L": ("Quasi-orthogonal length", "m")})
+    rec.step("Mass balance", r"e_m = \max_i \left|\frac{\dot m_i}{\dot m} - 1\right|", {r"\dot m": (gas["mdot"], "kg/s")}, mer["mass_error_pct"], "%", "e_m",
+             note="Mass flow integrated across every station against the stage mass flow")
+    rec.sym(**{r"\dot m_i": ("Mass flow through station i", "kg/s")})
+    sl = b2b["streamlines"]
+    jd = max(sl, key=lambda k_: sl[k_]["diffusion_ratio"])
+    rec.step("Blade loading (Stanitz)", r"W_{ss,ps} = W \pm \frac{\pi}{Z_b}\,\frac{d(r\,c_u)}{dm}", {"Z_b": imp["blades"]}, max(sl[jd]["W_ss"]), "m/s", "W_{ss}",
+             note=f"On hub, mid and shroud streamlines; highest suction-side velocity ({jd}) shown")
+    rec.step("Diffusion ratio", r"DR = W_{ss,\max} / W_2", {"W_{ss}": (max(sl[jd]["W_ss"]), "m/s"), "W_2": (sl[jd]["W"][-1], "m/s")},
+             b2b["max_diffusion_ratio"], "", "DR", note=f"Largest of the three streamlines ({jd})", ui="Max diffusion ratio W_ss,max / W2 <= 2.0 (Rodgers)")
+    rec.step("Lowest pressure-side velocity", r"\min W_{ps} > 0", {}, min(v["min_ps"] for v in sl.values()), "m/s", "W_{ps}", ui="No pressure-side flow reversal")
+    t = imp["triangles"]["inlet"]
+    rec.step("Choke margin", r"CM = \frac{A_{th}}{A^*},\quad \frac{A_1}{A^*} = \frac{1}{M_1}\left[\frac{2}{k+1}\left(1+\frac{k-1}{2}M_1^2\right)\right]^{\frac{k+1}{2(k-1)}}",
+             {"A_{th}": (b2b["throat_area_mm2"] / 1e6, "m²"), "M_1": t["mean"]["relative_mach"], "k": 1.33}, b2b["choke_margin"], "", "CM",
+             note="Throat = blades × (pitch × sin of blade angle − 4 mm) × blade height", ui="Inducer throat choke margin >= 1.05")
+    Mr = raw["Mrel"]
+    im, jm = np.unravel_index(int(np.argmax(Mr)), Mr.shape)
+    rec.step("Peak relative Mach number", r"M_{rel} = \frac{W}{a},\quad a = \sqrt{k\,Z\,R\,T}",
+             {"W": (raw["W"][im, jm], "m/s"), "k": gas["k"], "Z": gas["Z"], "R": (gas["R"], "J/(kg K)"), "T": (raw["T_c"][im, jm] + 273.15, "K")}, float(Mr.max()), "", "M_{rel}",
+             note=f"Highest over the meridional grid (station {im}, streamline {jm})", ui="Max relative Mach number < 0.9")
+    d0, d1 = st["diffuser"][0], st["diffuser"][-1]
+    b = imp["b2_mm"] / 1e3
+    rec.step("Vaneless diffuser", r"\frac{d(r c_u)}{dr} = -\frac{c_f\,r\,C\,c_u}{b\,c_m},\quad \frac{dp_0}{dr} = -\frac{c_f\,\rho\,C^3}{c_m\,b}",
+             {"c_f": 0.005, "b": (b, "m"), r"\dot m": (gas["mdot"], "kg/s")}, d1["alpha_deg"], "°", r"\alpha",
+             note=f"Marched outward in 40 radial steps to 1.6 r₂, 4 passes per step for density; exit flow angle shown (inlet {d0['alpha_deg']:.1f}°)")
+    rec.step("Pressure recovery", r"C_p = \frac{p - p_2}{p_{0,2} - p_2}", {"p": (d1["p_bara"] * 1e5, "Pa"), "p_2": (d0["p_bara"] * 1e5, "Pa"), "p_{0,2}": (d0["p0_bara"] * 1e5, "Pa")},
+             st["cp_recovery"], "", r"C_p")
+    rec.step("Diffuser loss", r"\zeta = \frac{p_{0,2} - p_{0,3}}{p_{0,2} - p_2}", {"p_{0,2}": (d0["p0_bara"] * 1e5, "Pa"), "p_{0,3}": (d1["p0_bara"] * 1e5, "Pa"), "p_2": (d0["p_bara"] * 1e5, "Pa")},
+             st["loss_coefficient"], "", r"\zeta")
+    rec.sym(**{"p_2": ("Static pressure at the diffuser inlet", "Pa"), "p_{0,2}": ("Total pressure at the diffuser inlet", "Pa"), "p_{0,3}": ("Total pressure at the diffuser exit", "Pa")})
+    rec.step("Diffuser inlet flow angle", r"\alpha_c = 4 + 85\,b/r_2 \;(8 \ldots 22°)", {"b": (b, "m"), "r_2": (imp["D2_mm"] / 2e3, "m")},
+             st["alpha2_deg"], "°", r"\alpha", note=f"Critical angle {st['stall']['alpha_crit_deg']:.1f}°; the diffuser inlet angle must be larger", ui="Diffuser inlet angle above stall angle at design")
+    rec.step("Rotating-stall onset flow", r"\alpha(q) = \arctan\frac{c_m\,q}{\sigma_s U_2 - c_m\,q\cot\beta_{2b}} = \alpha_c",
+             {r"\alpha_c": (st["stall"]["alpha_crit_deg"], "°"), r"\sigma_s": imp["slip_factor"], "U_2": (mer["U2"], "m/s")}, st["stall"]["stall_q_frac"], "", "q",
+             note="Flow fraction where the diffuser inlet angle first reaches the critical angle (scan from 40 % to 130 %)", ui="Rotating-stall onset at or below 75 % of design flow")
+    rec.sym(**{r"\sigma_s": ("Slip factor", "-"), "U_2": ("Tip speed", "m/s"), r"\beta_{2b}": ("Exit blade angle from tangential", "rad")})
+    rec.step("Volute radial force", r"F_r = 0.36\,|1 - q^2|\,\Delta p\,D_2\,b", {r"\Delta p": (dp, "Pa"), "D_2": (imp["D2_mm"] / 1e3, "m"), "b": (b, "m"), "q": 1.0},
+             st["volute_force_design_n"], "N", "F_r", note="Near zero at design flow, rising toward low and high flow")
+    rec.step("Cascade panel method", r"\sum_j \Gamma_j\,\mathbf{v}_{ij}\cdot\mathbf{n}_i = -\mathbf{V}_m\cdot\mathbf{n}_i,\quad V_{y2} = V_{y1} + \frac{\sum\Gamma_j}{s}",
+             {"N_p": cas["panels"], r"\sigma": cas["solidity"], r"\alpha_1": (cas["inlet_flow_deg"], "°"), r"\Delta V_y": cas["residual"]}, cas["exit_flow_deg"], "°", r"\alpha_2",
+             note=f"Lumped vortices at quarter panel, control points at three-quarter panel, periodic row kernel; {cas['iterations']} passes on the mean velocity")
+    rec.sym(**{r"\mathbf{v}_{ij}": ("Velocity at point i from a row of unit vortices at j", "1/m"), r"\mathbf{n}_i": ("Panel normal", "-"),
+               r"\mathbf{V}_m": ("Vector-mean of inlet and exit velocity", "-"), r"V_{y1}": ("Inlet tangential velocity / axial velocity", "-")})
+    rec.step("Vane loading", r"\Delta C_p = \frac{2\,\Gamma_j}{\Delta l_j\,|V_m|}", {"N_p": cas["panels"]}, max(cas["dcp"]), "", r"\Delta C_p", note="Peak over the chord")
+    rec.sym(**{r"\Delta l_j": ("Panel length", "-"), "|V_m|": ("Mean velocity magnitude", "-")})
+    rec.step("Turning", r"\alpha_1 - \alpha_2", {r"\alpha_1": (cas["inlet_flow_deg"], "°"), r"\alpha_2": (cas["exit_flow_deg"], "°")}, cas["turning_deg"], "°")
 
 
 def export_zip(imp: dict, res: dict, project_name: str) -> bytes:

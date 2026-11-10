@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fmt, type Json } from "../api";
+import { Trace } from "./common";import { fmt, type Json } from "../api";
 import { safeName, saveFrom } from "../files";
 import { LiveChart } from "../components/LiveChart";
 import { ramp } from "../components/feaFields";
@@ -154,6 +154,7 @@ export function CfdPage(c: Ctx) {
               speed, gas, walls, periodicity) and meridional_field.csv for comparing with the 3-D result.</p></div>
         </div>
       </>}
+      {r?.trace && <Trace trace={r.trace} />}
     </>
   );
 }

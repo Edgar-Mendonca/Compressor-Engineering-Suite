@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fmt, type Json } from "../api";
+import { Trace } from "./common";import { fmt, type Json } from "../api";
 import { Plot, SERIES } from "../components/Plot";
 import { FeaExplorer, Viewer, type View } from "../components/Fea3D";
 import { safeName, saveBlob, saveFrom } from "../files";
@@ -267,6 +267,7 @@ export function ImpellerFEAPage(c: Ctx) {
           <FeaExplorer r={r} body={body} name={name} />
         </section>
       </>}
+      {r?.trace && <Trace trace={r.trace} />}
     </>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fmt, type Json } from "../api";
+import { Trace } from "./common";import { fmt, type Json } from "../api";
 import { safeName, saveFrom } from "../files";
 import { LiveChart } from "../components/LiveChart";
 import { Pid, type Sel } from "../components/Pid";
@@ -199,6 +199,7 @@ export function DynamicsPage(c: Ctx) {
               { x: sub(t), y: sub(cm.T_out_c), color: C[1], name: "T discharge", width: 1.3, right: true }]} />
         </div>
       </>}
+      {res?.trace && <Trace trace={res.trace} />}
     </>
   );
 }

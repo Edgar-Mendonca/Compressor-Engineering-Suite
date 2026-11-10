@@ -16,6 +16,8 @@ import math
 import numpy as np
 from scipy.integrate import solve_ivp
 
+from compsuite.core.trace import record
+
 RU = 8314.462618
 N6 = 27.3 / 3600.0          # kg/s per (Cv sqrt(bar kg/m3))
 
@@ -239,7 +241,7 @@ def simulate(net: dict, scenario: dict) -> dict:
             y[md.o_i + k_] = np.clip(y[md.o_i + k_], -1, 1)
     evs = sorted(scenario.get("events", []), key=lambda e: e["t"])
     cuts = sorted({0.0, T_end, *[min(max(e["t"], 0), T_end) for e in evs]})
-    ts, ys = [], []
+    ts, ys, nfev, status = [], [], 0, 0
     for t0, t1 in zip(cuts[:-1], cuts[1:]):
         for e in evs:
             if t0 <= e["t"] < t1 or (e["t"] <= 0 and t0 == 0):
@@ -249,6 +251,7 @@ def simulate(net: dict, scenario: dict) -> dict:
         te = np.arange(t0, t1, dt)
         s = solve_ivp(md.rhs, (t0, t1), y, method="LSODA", t_eval=te if len(te) else None, rtol=1e-5, atol=1e-6, max_step=0.05)
         ts.append(s.t); ys.append(s.y)
+        nfev, status = nfev + s.nfev, min(status, s.status)
         y = s.y[:, -1] if s.y.shape[1] else y
         if s.status < 0:
             break
@@ -256,7 +259,9 @@ def simulate(net: dict, scenario: dict) -> dict:
         e.pop("_done", None)
     t = np.concatenate(ts)
     Y = np.concatenate(ys, axis=1)
-    return _post(md, t, Y, evs)
+    res = _post(md, t, Y, evs)
+    res["trace"] = _trace(md, net, scenario, t, Y, res, nfev, status, len(cuts) - 1)
+    return res
 
 
 def _post(md: Model, t, Y, evs) -> dict:
@@ -300,3 +305,90 @@ def _post(md: Model, t, Y, evs) -> dict:
                "end_pressures_bara": dict(zip(vols, P_end)), "verdict": "fail" if surge else "pass", "stop_time_s": stop, "final_speed_frac": float(nf[-1])}
     return {"t": t.tolist(), "nodes": out_n, "links": out_l, "compressor": cmp, "summary": summary,
             "map": {"q": (np.asarray(md.fq) * 3600).tolist(), "h": (np.asarray(md.fh) / 1e3).tolist(), "q_surge": md.qs * 3600, "h_surge": md.hs / 1e3}}
+
+
+def _trace(md: Model, net: dict, sc: dict, t, Y, res: dict, nfev: int, status: int, nseg: int):
+    """Calculation steps of one run, from the series already computed."""
+    rec = record("dynamics", "Lumped-parameter network, LSODA time integration", [net, sc],
+                 assumptions=["Gas Z, cp, k and molar mass held at the design suction state", "Compressor map collapsed by the fan laws; extended to shut-off and reverse flow",
+                              "Volumes well mixed; coolers return gas at their outlet temperature with a time lag"])
+    if status < 0:
+        rec.warn("Time integration stopped early (solver failure)")
+    sm, cmp = res["summary"], res["compressor"]
+    c = md.links[md.comp]
+    rec.sym(**{"m_i": ("Gas mass in volume i", "kg"), "T_i": ("Gas temperature in volume i", "K"), r"\dot m": ("Mass flow", "kg/s"), "c_p": ("Specific heat at constant pressure", "J/(kg K)"),
+               "c_v": ("Specific heat at constant volume", "J/(kg K)"), "Q_i": ("Heat removed by a cooler", "W"), r"\dot m_c": ("Compressor mass flow", "kg/s"),
+               "A": ("Compressor duct area", "m²"), "L": ("Compressor duct length", "m"), "P_1": ("Suction pressure", "Pa"), "P_2": ("Discharge pressure", "Pa"),
+               r"\Pi": ("Pressure ratio from the map", "-"), "J": ("Train inertia", "kg m²"), r"\omega_0": ("Rated angular speed", "rad/s"), "n": ("Speed fraction", "-"),
+               r"\tau_d": ("Driver torque", "N m"), r"\tau_g": ("Gas torque", "N m"), r"\tau_l": ("Loss torque", "N m"), "N_x": ("Number of states", "-"),
+               r"\Delta t": ("Output time step", "s"), "N_t": ("Output time points", "-"), "N_f": ("Right-hand-side evaluations", "-"),
+               r"e_m": ("Mass balance error, relative to the gas inventory", "%"), r"\Delta m": ("Change of gas mass in all volumes", "kg"),
+               r"\int \dot m_b\,dt": ("Net mass that entered through the boundaries", "kg"), "W": ("Valve mass flow", "kg/s"), "C_v": ("Valve flow coefficient", "-"),
+               "f": ("Valve trim characteristic at the opening", "-"), "Y": ("Expansion factor", "-"), "x": ("Pressure-drop ratio (limited at choke)", "-"),
+               r"\rho_1": ("Upstream density", "kg/m³"), "N_6": ("Units constant", "kg/s per (Cv √(bar kg/m³))"), "H": ("Polytropic head", "J/kg"),
+               r"\sigma": ("n/(n−1) of the polytropic path", "-"), "Z": ("Compressibility factor", "-"), "R": ("Specific gas constant", "J/(kg K)"),
+               "T_1": ("Suction temperature", "K"), "T_2": ("Discharge temperature", "K"), "m_T": ("Temperature exponent T₂/T₁ = Π^m", "-"),
+               r"\eta_0": ("Best map efficiency", "-"), r"\eta": ("Efficiency at the operating point", "-"), "q": ("Actual suction flow", "m³/h"),
+               "q_s": ("Surge flow at rated speed", "m³/h"), "SM": ("Surge margin on flow", "%"), "P": ("Volume pressure", "Pa"), "V": ("Volume", "m³"),
+               "P_s": ("Suction-side pressure at the end", "bara"), "P_d": ("Discharge-side pressure at the end", "bara"), "N_c": ("Surge (flow reversal) cycles", "-")})
+    rec.step("Governing equations", r"\frac{dm_i}{dt} = \sum \dot m_{in} - \sum \dot m_{out},\quad \frac{dT_i}{dt} = \frac{\sum \dot m\,c_p T - c_v T_i \frac{dm_i}{dt} + Q_i}{m_i c_v},"
+             r"\quad \frac{d\dot m_c}{dt} = \frac{A}{L}\,(P_1 \Pi - P_2),\quad J\,\omega_0 \frac{dn}{dt} = \tau_d - \tau_g - \tau_l",
+             {"A": (c["A_m2"], "m²"), "L": (c["L_m"], "m"), "J": (net["driver"]["J_kgm2"], "kg m²"), r"\omega_0": (md.N0 * math.pi / 30, "rad/s")}, md.n, "states", "N_x",
+             note="Mass and energy of every volume, compressor flow with duct inertia, valve strokes, shaft speed and controller integrators")
+    dt = float(sc.get("dt_s", 0.05))
+    rec.step("Time integration", r"y(t + \Delta t) \text{ by LSODA},\ \text{rtol} = 10^{-5},\ \text{atol} = 10^{-6}",
+             {r"\Delta t": (dt, "s"), "N_f": nfev}, len(t), "points", "N_t",
+             note=f"Adaptive stiff/non-stiff integrator, internal step ≤ 0.05 s, restarted at each of {nseg} event times; "
+                  f"{'completed' if status >= 0 else 'stopped early'} after {nfev} evaluations; {sc.get('pre_s', 20) if not sc.get('settled') else 0} s settling before t = 0")
+    vols = [md.nodes[i] for i in md.vol]
+    m0, m1 = Y[md.o_m:md.o_m + len(vols), 0].sum(), Y[md.o_m:md.o_m + len(vols), -1].sum()
+    bnd = {n["id"] for n in md.nodes if n["type"] in ("source", "sink")}
+    flow_in = np.zeros(len(t))
+    for l in md.links:
+        q = np.asarray(res["links"][l["id"]]["mdot_kg_s"])
+        flow_in += q * ((l["from"] in bnd) - (l["to"] in bnd))
+    m_in = float(np.trapezoid(flow_in, t)) if len(t) > 1 else 0.0
+    rec.step("Mass balance", r"e_m = \frac{\Delta m - \int \dot m_b\,dt}{\sum m_i}", {r"\Delta m": (m1 - m0, "kg"), r"\int \dot m_b\,dt": (m_in, "kg")},
+             (m1 - m0 - m_in) / max(m0, 1e-9) * 100, "%", "e_m", note="Boundary flows integrated by the trapezoid rule on the output points")
+    PT = [(res["nodes"][n["id"]]["P_bara"][0] * 1e5, res["nodes"][n["id"]]["T_c"][0] + 273.15) for n in md.nodes]
+    for li in md.valves:
+        l = md.links[li]
+        if l["type"] == "pipe":
+            continue
+        a, b = md.ni[l["from"]], md.ni[l["to"]]
+        (P1, T1), (P2, _) = (PT[a], PT[b]) if PT[a][0] >= PT[b][0] else (PT[b], PT[a])
+        pos = res["links"][l["id"]]["open"][0]
+        ch = l.get("char", "linear")
+        f = pos if ch == "linear" else (pos ** 0.5 if ch == "quick" else (50 ** (pos - 1) if pos > 0.01 else pos * 50 ** -0.99))
+        Fk = md.k / 1.4
+        x = min((P1 - P2) / P1, Fk * l.get("xT", 0.7))
+        rec.step(f"Valve flow {l['id']}", r"W = N_6\,C_v\,f\,Y\sqrt{x\,P_1\,\rho_1},\quad Y = 1 - \frac{x}{3F_k x_T}",
+                 {"C_v": l["Cv"], "f": f, "Y": 1 - x / (3 * Fk * l.get("xT", 0.7)), "x": x, "P_1": (P1 / 1e5, "bar"), r"\rho_1": (P1 / (md.Z * md.Rs * T1), "kg/m³"), "N_6": N6},
+                 res["links"][l["id"]]["mdot_kg_s"][0], "kg/s", "W", note=f"{l.get('label', l['id'])} at t = 0; Cv from the same equation at its design duty ({ch} trim)")
+    rec.sym(**{"F_k": ("Ratio of specific heats factor k/1.4", "-"), "x_T": ("Pressure-drop ratio factor at choke", "-")})
+    T1 = res["nodes"][c["from"]]["T_c"][0] + 273.15
+    H0 = cmp["head_kj_kg"][0] * 1e3
+    rec.step("Pressure ratio from head", r"\Pi = \left(1 + \frac{H}{\sigma\,Z\,R\,T_1}\right)^{\sigma}", {"H": (H0, "J/kg"), r"\sigma": md.sig, "Z": md.Z, "R": (md.Rs, "J/(kg K)"), "T_1": (T1, "K")},
+             max(1 + H0 / (md.sig * md.Z * md.Rs * T1), 1e-3) ** md.sig, "", r"\Pi",
+             note="σ found by bisection so that the design head and pressure ratio agree; map head from the fan-law collapsed curve, scaled through the rated point")
+    if sm["min_surge_margin_pct"] is not None:
+        run = np.asarray(cmp["speed_frac"]) > 0.3
+        k = int(np.flatnonzero(run)[np.argmin(np.asarray(cmp["surge_margin"])[run])])
+        rec.step("Minimum surge margin", r"SM = \frac{q / n}{q_s} - 1", {"q": (cmp["q_am3_h"][k], "m³/h"), "n": cmp["speed_frac"][k], "q_s": (md.qs * 3600, "m³/h")},
+                 sm["min_surge_margin_pct"], "%", "SM", note=f"Lowest while the speed is above 30 %, at t = {t[k]:.2f} s", ui=["Min surge margin", "Margin now"])
+    k = int(np.argmax(cmp["T_out_c"]))
+    rec.step("Peak discharge temperature", r"T_2 = T_1\,\Pi^{\,m_T \eta_0 / \eta}", {"T_1": (res["nodes"][c["from"]]["T_c"][k] + 273.15, "K"), "m_T": md.mT, r"\eta_0": md.eta0},
+             sm["max_discharge_c"], "°C", "T_2", note=f"Highest over the run, at t = {t[k]:.2f} s", ui="Max discharge T")
+    pv = {n["id"]: max(res["nodes"][n["id"]]["P_bara"]) for n in vols}
+    vid = max(pv, key=pv.get)
+    rec.step("Peak pressure", r"P = \frac{Z\,m_i\,R\,T_i}{V}", {"Z": md.Z, "R": (md.Rs, "J/(kg K)"), "V": (md.nodes[md.ni[vid]]["V_m3"], "m³")}, sm["max_pressure_bara"], "bara", "P",
+             note=f"Highest over all volumes and times ({vid})", ui="Max pressure")
+    ps, pd = res["nodes"][c["from"]]["P_bara"][-1], res["nodes"][c["to"]]["P_bara"][-1]
+    rec.step("Settle-out pressure", r"P_{so} = \tfrac12 (P_s + P_d) \text{ when } |P_d - P_s| < 0.03\,P_d", {"P_s": (ps, "bara"), "P_d": (pd, "bara")},
+             sm["settle_out_bara"], "bara", "P_{so}", note="Shown only when the two sides have equalised by the end of the run", ui="Settle-out")
+    rec.sym(**{"P_{so}": ("Settle-out pressure", "bara")})
+    rec.step("Surge cycles", r"N_c = \#\{\dot m_c \text{ turns below } -0.02\,\dot m_{design}\}", {r"\dot m_{design}": (c["design_kg_s"], "kg/s")}, sm["surge_cycles"], "", "N_c",
+             note=f"Surge is flagged when the surge margin goes below zero while running; {'surge' if sm['surge'] else 'no surge'}", ui="Surge")
+    rec.sym(**{r"\dot m_{design}": ("Design mass flow", "kg/s")})
+    rec.step("Verdict", r"\text{pass if no surge}", {}, sm["verdict"].upper(), "", note="Fails when the operating point crosses the surge line at speed")
+    return rec
