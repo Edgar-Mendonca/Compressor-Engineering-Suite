@@ -69,6 +69,54 @@ def marin_endurance(mat: dict, d_m: float, finish: str, reliability: float) -> d
     return {"ka": ka, "kb": kb, "ke": ke, "Se_mpa": Se}
 
 
+def _point_steps(rec, i, d, di, r, D, ktb, ktt, kf, kfs, M, T, sb, tau, sax, F_ax, en, mat, sa, sm, n_f, s_max, n_y, k_t) -> None:
+    if i == 0:
+        rec.sym(**{"d": ("Smaller shaft diameter at the point", "m"), "d_i": ("Bore diameter", "m"), "D": ("Larger diameter at the shoulder", "m"),
+                   "r": ("Fillet radius", "m"), "K_t": ("Bending stress concentration factor", "-"), "K_{ts}": ("Torsion stress concentration factor", "-"),
+                   "q": ("Notch sensitivity in bending", "-"), "q_s": ("Notch sensitivity in torsion", "-"), "K_f": ("Fatigue notch factor in bending", "-"),
+                   "K_{fs}": ("Fatigue notch factor in torsion", "-"), "M": ("Gravity bending moment", "N·m"), "T": ("Torque at the point", "N·m"),
+                   r"\sigma_b": ("Bending stress", "Pa"), r"\tau": ("Torsional shear stress", "Pa"), r"\sigma_{ax}": ("Axial stress from thrust", "Pa"),
+                   "F_{ax}": ("Axial thrust (residual plus swing)", "N"), r"\sigma_{vm}": ("Von Mises stress", "Pa"), "S_e": ("Corrected endurance limit", "Pa"),
+                   "S_e'": ("Endurance limit of polished test bar", "Pa"), "k_a": ("Surface finish factor", "-"), "k_b": ("Size factor", "-"),
+                   "k_e": ("Reliability factor", "-"), r"\sigma_a": ("Alternating stress", "Pa"), r"\sigma_m": ("Mean (steady) stress", "Pa"),
+                   "S_u": ("Ultimate tensile strength", "Pa"), "S_y": ("Yield strength", "Pa"), "n_f": ("Fatigue safety factor", "-"),
+                   "n_y": ("Yield safety factor", "-"), r"\sigma_{max}": ("Peak stress with transient torque", "Pa"), "k_t": ("Transient torque factor", "-"),
+                   "n_{f,min}": ("Lowest fatigue safety factor along the shaft", "-"), "n_{y,min}": ("Lowest yield safety factor along the shaft", "-"),
+                   "K": ("Shaft stiffness matrix on the bearings", "N/m"), "y": ("Static deflection", "m"), "F_g": ("Gravity loads", "N"),
+                   "y_{mid}": ("Deflection at mid-span", "m"), r"\sum W": ("Total rotor weight", "N"), "y_{b1}": ("Deflection at bearing 1", "m"),
+                   "y_{b2}": ("Deflection at bearing 2", "m"), "k_s": ("Equivalent static shaft stiffness", "N/m"),
+                   "A": ("Chart fit coefficient", "-"), "b": ("Chart fit exponent", "-"), "z": ("Axial position", "m"),
+                   "z_k": ("Position of load or bearing k", "m"), "R_k": ("Bearing reaction", "N"), "W_k": ("Gravity load at a node", "N"),
+                   "P_k": ("Stage power", "W"), r"\omega": ("Shaft angular speed", "rad/s")})
+    if r:
+        rec.step("Bending stress concentration factor", r"K_t = A\,(r/d)^{b}", {"D": (D, "m"), "d": (d, "m"), "r": (r, "m")}, ktb, "", "K_t", row=i,
+                 note="A and b read from the stepped round bar chart fits, interpolated in D/d", ui="Kt b")
+        q = (kf - 1) / (ktb - 1) if ktb > 1 else notch_sensitivity(mat["uts_mpa"], r)
+        rec.step("Fatigue notch factor", r"K_f = 1 + q\,(K_t - 1)", {"q": q, "K_t": ktb}, kf, "", "K_f", row=i,
+                 note="q from the material strength and fillet radius", ui="Kf")
+    rec.step("Bending moment", r"M(z) = \sum_{z_k < z} R_k\,(z - z_k) - \sum_{z_k < z} W_k\,(z - z_k)", {}, M, "N·m", "M", row=i,
+             note="Statics of the gravity loads W and bearing reactions R to the left of the point", ui="M N·m")
+    rec.step("Torque", r"T(z) = \sum_{\text{impellers beyond } z} P_k/\omega", {}, T, "N·m", "T", row=i,
+             note="Each impeller takes its own stage power out of the shaft", ui="T N·m")
+    rec.step("Bending stress", r"\sigma_b = \frac{32\,M\,d}{\pi\,(d^4 - d_i^4)}", {"M": (M, "N·m"), "d": (d, "m"), "d_i": (di, "m")}, sb, "MPa", r"\sigma_b", row=i, ui="σb MPa")
+    rec.step("Torsional shear stress", r"\tau = \frac{16\,T\,d}{\pi\,(d^4 - d_i^4)}", {"T": (T, "N·m"), "d": (d, "m"), "d_i": (di, "m")}, tau, "MPa", r"\tau", row=i, ui="τ MPa")
+    rec.step("Axial stress", r"\sigma_{ax} = \frac{4\,F_{ax}}{\pi\,(d^2 - d_i^2)}", {"F_{ax}": (F_ax, "N"), "d": (d, "m"), "d_i": (di, "m")},
+             sax, "MPa", r"\sigma_{ax}", row=i)
+    rec.step("Von Mises stress", r"\sigma_{vm} = \sqrt{(\sigma_b + \sigma_{ax})^2 + 3\,\tau^2}",
+             {r"\sigma_b": (sb, "MPa"), r"\sigma_{ax}": (sax, "MPa"), r"\tau": (tau, "MPa")}, math.sqrt((sb + sax) ** 2 + 3 * tau**2), "MPa",
+             r"\sigma_{vm}", row=i, ui="σvm MPa")
+    rec.step("Endurance limit", r"S_e = k_a\,k_b\,k_e\,S_e'", {"k_a": en["ka"], "k_b": en["kb"], "k_e": en["ke"], "S_e'": (mat["endurance_mpa"], "MPa")},
+             en["Se_mpa"], "MPa", "S_e", row=i, ui="Se MPa")
+    rec.step("Fatigue safety factor", r"\frac{1}{n_f} = \frac{\sigma_a}{S_e} + \frac{\sigma_m}{S_u},\quad \sigma_a = K_f\,\sigma_b,\quad"
+             r" \sigma_m = \sqrt{(K_f\,\sigma_{ax})^2 + 3\,(K_{fs}\,\tau)^2}",
+             {"K_f": kf, "K_{fs}": kfs, r"\sigma_b": (sb, "MPa"), r"\sigma_{ax}": (sax, "MPa"), r"\tau": (tau, "MPa"), r"\sigma_a": (sa, "MPa"),
+              r"\sigma_m": (sm, "MPa"), "S_e": (en["Se_mpa"], "MPa"), "S_u": (mat["uts_mpa"], "MPa")}, n_f, "", "n_f", row=i,
+             note="Gravity bending alternates once per turn; torque and thrust are steady", ui="SF fatigue")
+    rec.step("Yield safety factor", r"n_y = \frac{S_y}{\sigma_{max}},\quad \sigma_{max} = \sqrt{(K_f(\sigma_b + \sigma_{ax}))^2 + 3\,(K_{fs}\,k_t\,\tau)^2}",
+             {"S_y": (mat["yield_mpa"], "MPa"), "K_f": kf, "K_{fs}": kfs, r"\sigma_b": (sb, "MPa"), r"\sigma_{ax}": (sax, "MPa"),
+              r"\tau": (tau, "MPa"), "k_t": k_t, r"\sigma_{max}": (s_max, "MPa")}, n_y, "", "n_y", row=i, ui="SF yield")
+
+
 def shaft_integrity(model, rotor: dict, mat: dict, project, stage_powers_w: list[float], omega: float,
                     static: dict) -> dict:
     sd, cr = project.shaft, project.criteria
@@ -138,6 +186,8 @@ def shaft_integrity(model, rotor: dict, mat: dict, project, stage_powers_w: list
         n_f = 1.0 / (sa / en["Se_mpa"] + sm / Su) if (sa + sm) > 0 else float("inf")
         s_max = math.sqrt((kf * (sb + sax)) ** 2 + 3 * (kfs * tau * sd.torque_transient_factor) ** 2)
         n_y = Sy / s_max if s_max > 0 else float("inf")
+        _point_steps(rec, len(points), d, di, r, Dl if r else d, ktb, ktt, kf, kfs, Mz, Tz, sb, tau, sax, thrust, en, mat, sa, sm, n_f,
+                     s_max, n_y, sd.torque_transient_factor)
         points.append({"z_m": ze, "kind": kind, "d_mm": d * 1e3, "fillet_mm": r * 1e3 if r else None, "kt_bending": ktb,
                        "kt_torsion": ktt, "kf": kf, "kfs": kfs, "moment_nm": Mz, "torque_nm": Tz,
                        "bending_mpa": sb, "torsion_mpa": tau, "axial_mpa": sax, "von_mises_mpa": math.sqrt((sb + sax) ** 2 + 3 * tau**2),
@@ -155,6 +205,15 @@ def shaft_integrity(model, rotor: dict, mat: dict, project, stage_powers_w: list
     ybrg = [float(np.interp(b, z, y)) for b in brg_z]
     rel_sag = abs(float(np.interp(mid, z, y)) - 0.5 * (ybrg[0] + ybrg[1]))
     stiffness = W.sum() / max(rel_sag, 1e-12)
+    rec.step("Lowest fatigue safety factor", r"n_{f,min} = \min_i n_{f,i}", {}, crit_f["fatigue_safety"], "", "n_{f,min}",
+             note=f"Lowest fatigue safety factor of all checked points, at z = {crit_f['z_m'] * 1e3:.0f} mm", ui="Min fatigue SF")
+    rec.step("Min yield SF", r"n_{y,min} = \min_i n_{y,i}", {}, crit_y["yield_safety"], "", "n_{y,min}",
+             note=f"Lowest yield safety factor of all checked points, at z = {crit_y['z_m'] * 1e3:.0f} mm")
+    rec.step("Mid-span sag", r"K\,y = F_g", {"F_g": (W.sum(), "N")}, sag_mid * 1e6, "µm", "y_{mid}",
+             note="Static deflection under gravity from the finite-element shaft model on its bearings, read at mid-span")
+    rec.step("Equivalent static stiffness", r"k_s = \frac{\sum W}{y_{mid} - \tfrac{1}{2}(y_{b1} + y_{b2})}",
+             {r"\sum W": (W.sum(), "N"), "y_{mid}": (float(np.interp(mid, z, y)), "m"), "y_{b1}": (ybrg[0], "m"), "y_{b2}": (ybrg[1], "m")},
+             stiffness / 1e6, "MN/m", "k_s")
     return {"points": points, "moment_diagram": {"z_m": z.tolist(), "moment_nm": M.tolist(), "torque_nm": T.tolist()},
             "bearing_reactions_n": reactions, "min_fatigue_safety": crit_f["fatigue_safety"], "critical_fatigue_z_m": crit_f["z_m"],
             "min_yield_safety": crit_y["yield_safety"], "critical_yield_z_m": crit_y["z_m"],

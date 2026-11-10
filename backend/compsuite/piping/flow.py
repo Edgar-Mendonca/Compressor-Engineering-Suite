@@ -104,6 +104,57 @@ def orifice_iso5167(m_target: float, D: float, beta: float, rho: float, mu: floa
                                  (math.sqrt(1 - beta**4 * (1 - C**2)) + C * beta**2)}
 
 
+def _line_steps(rec, i, o, st, m, L, K, vlim, pd) -> None:
+    if i == 0:
+        rec.sym(**{"OD": ("Pipe outside diameter", "m"), "t": ("Pipe wall thickness", "m"), "d": ("Pipe inside diameter", "m"), r"\dot m": ("Mass flow", "kg/s"),
+                   r"\rho": ("Gas density in the line", "kg/m³"), "v": ("Gas velocity", "m/s"), "v_{max}": ("Velocity limit", "m/s"),
+                   r"(\rho v^2)_{max}": ("Momentum limit", "Pa"), "a": ("Speed of sound", "m/s"), "Ma": ("Mach number", "-"), "G": ("Mass flux", "kg/(m² s)"),
+                   r"\mu": ("Gas viscosity", "Pa·s"), "Re": ("Reynolds number", "-"), r"\varepsilon": ("Pipe roughness", "m"), "f": ("Darcy friction factor", "-"),
+                   "p_1": ("Line inlet pressure", "Pa"), "p_2": ("Line outlet pressure", "Pa"), "Z": ("Compressibility factor", "-"),
+                   "R_u": ("Universal gas constant", "J/(kmol K)"), "M": ("Molecular weight", "kg/kmol"), "T": ("Gas temperature", "K"), "L": ("Line length", "m"),
+                   "K": ("Sum of fitting loss coefficients", "-"), r"\Delta p": ("Line pressure drop", "Pa"), "NPS": ("Nominal pipe size", "in")})
+    rec.step("Pipe size", r"\text{smallest NPS with } v \le v_{max},\ \rho v^2 \le (\rho v^2)_{max}",
+             {"v_{max}": (vlim, "m/s"), r"(\rho v^2)_{max}": (pd.rho_v2_limit_pa, "Pa")}, o["nps_in"], "in", "NPS", row=i,
+             note="First standard-weight size in the table that meets both limits", ui="NPS")
+    rec.step("Inside diameter", r"d = OD - 2\,t", {}, o["id_m"] * 1e3, "mm", "d", row=i, ui="ID mm")
+    rec.step("Gas velocity", r"v = \frac{\dot m}{\rho\,\pi d^2/4}", {r"\dot m": (m, "kg/s"), r"\rho": (st.rho, "kg/m³"), "d": (o["id_m"], "m")},
+             o["velocity_m_s"], "m/s", "v", row=i, ui="v m/s")
+    rec.step("Momentum flux", r"\rho\,v^2", {r"\rho": (st.rho, "kg/m³"), "v": (o["velocity_m_s"], "m/s")}, o["rho_v2_pa"], "Pa", "", row=i, ui="ρv² Pa")
+    rec.step("Mach number", "Ma = v / a", {"v": (o["velocity_m_s"], "m/s"), "a": (st.sound, "m/s")}, o["mach"], "", "Ma", row=i, ui="Mach")
+    rec.step("Reynolds number", r"Re = \frac{G\,d}{\mu},\quad G = \frac{\dot m}{\pi d^2/4}", {"G": (o["mass_flux"], "kg/(m² s)"), "d": (o["id_m"], "m"),
+             r"\mu": (st.mu, "Pa·s")}, o["reynolds"], "", "Re", row=i, ui="Re")
+    rec.step("Friction factor", r"\frac{1}{\sqrt f} = -2\log_{10}\left(\frac{\varepsilon/d}{3.7} + \frac{2.51}{Re\,\sqrt f}\right)",
+             {"Re": o["reynolds"], r"\varepsilon": (pd.roughness_mm / 1000, "m"), "d": (o["id_m"], "m")}, o["friction_factor"], "", "f", row=i,
+             note="Colebrook-White solved by repeated substitution from the Swamee-Jain start value", ui="f")
+    rec.step("Line pressure drop", r"p_1^2 - p_2^2 = G^2\,\frac{Z R_u T}{M}\left(f\,\frac{L}{d} + K + 2\ln\frac{p_1}{p_2}\right)",
+             {"p_1": (st.P, "Pa"), "G": (o["mass_flux"], "kg/(m² s)"), "Z": st.Z, "R_u": (8314.46, "J/(kmol K)"), "T": (st.T, "K"), "M": (st.mw, "kg/kmol"),
+              "f": o["friction_factor"], "L": (L, "m"), "d": (o["id_m"], "m"), "K": K}, o["dp_bar"], "bar", r"\Delta p", row=i,
+             note="Constant-temperature gas flow; p₂ found by a bracketing root search", ui="ΔP bar")
+
+
+def _valve_steps(rec, v, o, m, s, d, pd, H_r, q_r) -> None:
+    rec.sym(**{"x": ("Pressure drop ratio", "-"), "x_T": ("Valve choked pressure drop ratio factor", "-"), "F_\\gamma": ("Specific heat ratio factor", "-"),
+               r"\kappa": ("Isentropic exponent", "-"), "Y": ("Expansion factor", "-"), "C_v": ("Valve flow coefficient", "US gpm/psi^0.5"),
+               "W": ("Mass flow", "kg/h"), "P_1": ("Valve inlet pressure", "bar"), "P_2": ("Valve outlet pressure", "bar"), r"\rho_1": ("Inlet density", "kg/m³"),
+               r"\beta": ("Orifice diameter ratio", "-"), "C": ("Orifice discharge coefficient", "-"), r"\epsilon": ("Expansibility factor", "-"),
+               "d_o": ("Orifice bore", "m"), "D": ("Pipe inside diameter", "m"), r"\Delta p_o": ("Orifice differential pressure", "Pa"),
+               "Re_D": ("Pipe Reynolds number", "-"), "H_{sys}": ("System head", "kJ/kg"), "H_r": ("Rated polytropic head", "kJ/kg"),
+               "s": ("Static share of the system head", "-"), "Q": ("Suction volume flow", "m³/h"), "Q_r": ("Rated suction volume flow", "m³/h")})
+    rec.step("Recycle valve pressure drop ratio", r"x = \frac{P_1 - P_2}{P_1}", {"P_1": (d.P / 1e5, "bar"), "P_2": (s.P / 1e5, "bar")}, v["x"], "", "x", ui="x")
+    rec.step("Expansion factor", r"Y = 1 - \frac{\min(x,\,F_\gamma x_T)}{3\,F_\gamma\,x_T},\quad F_\gamma = \kappa/1.4",
+             {"x": v["x"], "x_T": pd.recycle_valve_xt, r"\kappa": d.k}, v["Y"], "", "Y", note="Choked when x ≥ F_γ x_T; Y not below 2/3")
+    rec.step("Recycle valve Cv", r"C_v = \frac{W}{27.3\,Y\,\sqrt{x\,P_1\,\rho_1}}", {"W": (m * 3600, "kg/h"), "Y": v["Y"], "x": min(v["x"], v["x_choked"]),
+             "P_1": (d.P / 1e5, "bar"), r"\rho_1": (d.rho, "kg/m³")}, v["cv"], "", "C_v", note="Sized for design flow from discharge back to suction")
+    rec.step("Orifice discharge coefficient", r"C = 0.5961 + 0.0261\beta^2 - 0.216\beta^8 + 0.000521\left(\frac{10^6\beta}{Re_D}\right)^{0.7} + \ldots",
+             {r"\beta": o["beta"], "Re_D": o["reynolds"], "D": (o["bore_m"] / o["beta"], "m")}, o["C"], "", "C",
+             note="Full fitted coefficient equation including the flange-tap terms", ui="C")
+    rec.step("Orifice differential pressure", r"\dot m = \frac{C}{\sqrt{1-\beta^4}}\,\epsilon\,\frac{\pi}{4}d_o^2\sqrt{2\,\Delta p_o\,\rho_1}",
+             {"C": o["C"], r"\beta": o["beta"], r"\epsilon": o["expansibility"], "d_o": (o["bore_m"], "m"), r"\rho_1": (s.rho, "kg/m³"), r"\dot m": (m, "kg/s")},
+             o["dp_pa"] / 1e3, "kPa", r"\Delta p_o", note="Δp found by a bracketing root search, ε updated with Δp", ui="ΔP")
+    rec.step("System head", r"H_{sys} = H_r\left(s + (1 - s)\,(Q/Q_r)^2\right)", {"H_r": (H_r, "kJ/kg"), "s": pd.system_static_pressure_fraction,
+             "Q_r": (q_r, "m³/h")}, H_r, "kJ/kg", "H_{sys}", note="Value at rated flow; the curve is drawn against the 100 % speed line")
+
+
 def piping_analysis(gas, comp_design: dict, perf_map: dict, project) -> dict:
     pd = project.piping
     rec = record("piping", "NPS sizing, Colebrook + isothermal compressible flow, IEC 60534 valve, ISO 5167 orifice", pd,
@@ -126,6 +177,7 @@ def piping_analysis(gas, comp_design: dict, perf_map: dict, project) -> dict:
         if size.get("exceeds_table"):
             rec.warn(f"{name} line exceeds the largest tabulated pipe size")
         out[name] = {**size, **dp, "dp_bar": dp["dp_pa"] / 1e5, "mach": size["velocity_m_s"] / st.sound}
+        _line_steps(rec, len(out) - 1, out[name], st, m, L, K, vlim, pd)
     valve = control_valve_cv(m * 3600, d.P / 1e5, s.P / 1e5, d.rho, d.k, pd.recycle_valve_xt)
     meter = orifice_iso5167(m, out["suction"]["id_m"], pd.orifice_beta, s.rho, s.mu, s.k, s.P)
     # System curve against the rated speed line.
@@ -139,5 +191,6 @@ def piping_analysis(gas, comp_design: dict, perf_map: dict, project) -> dict:
             sys_curve.append({"q_am3_h": q, "system_head_kj_kg": rated_head * (pd.system_static_pressure_fraction +
                                                                               (1 - pd.system_static_pressure_fraction) * (q / q_r) ** 2),
                               "compressor_head_kj_kg": p["head_kj_kg"]})
+    _valve_steps(rec, valve, meter, m, s, d, pd, rated_head, q_r)
     out.update({"recycle_valve": valve, "flowmeter": meter, "system_curve": sys_curve, "trace": rec})
     return out

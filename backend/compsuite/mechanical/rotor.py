@@ -161,6 +161,9 @@ def build_rotor(project, sizing: dict, stages: list[dict], impellers: list[dict]
         rec.warn(f"Bearing span / shaft diameter = {span / d_imp:.1f} exceeds {SLENDERNESS:.0f}: flexible rotor, check stability")
     if abs(residual) + swing > thrust_design + 1:
         rec.warn("Thrust swing exceeds thrust bearing capacity")
+    _steps(rec, sd, sizing, shaft_mat, impeller_mat, casing_power_w, omega, torque, tau_allow, d_torsion, d_imp, d_j, d_seal, D2,
+           span, z_b1, z_b2, P_s, P_d, gross, target, d_bp, F_bp, residual, swing, thrust_design, pad_area, d_in, d_collar,
+           project.bearings.thrust_allowable_unit_load_mpa, n_bp_len, masses)
     seal_locs = [(s.label, 0.5 * (s.z0 + s.z1), s.od) for s in sections if "Seal" in s.label or "Impeller" in s.label
                  or "Balance" in s.label]
     return {
@@ -178,6 +181,71 @@ def build_rotor(project, sizing: dict, stages: list[dict], impellers: list[dict]
         "close_clearance_locations": [{"label": a, "z_m": b, "diameter_m": c} for a, b, c in seal_locs],
         "impeller_z_m": imp_z, "trace": rec,
     }
+
+
+def _steps(rec, sd, sizing, shaft_mat, imp_mat, P, omega, T, tau_a, d_t, d, d_j, d_s, D2, span, z_b1, z_b2, P_s, P_d, F_g, F_t,
+           d_bp, F_bp, F_r, F_sw, F_d, A_p, d_in, D_c, p_a, L_bp, masses) -> None:
+    rec.sym(**{"P": ("Casing shaft power", "W"), r"\omega": ("Shaft angular speed", "rad/s"), "T": ("Casing torque", "N·m"), r"\tau_a": ("Allowable shear stress", "Pa"), "S_y": ("Shaft yield strength", "Pa"),
+               "k_t": ("Transient torque factor", "-"), "d_t": ("Minimum shaft diameter for torsion", "m"),
+               "d": ("Shaft diameter at the impellers", "m"), "d_j": ("Journal diameter", "m"), "d_s": ("Seal sleeve diameter", "m"),
+               "D_2": ("Impeller tip diameter", "m"), "L_s": ("Bearing span", "m"), "z_{b1}": ("Drive-end bearing position", "m"),
+               "z_{b2}": ("Non-drive-end bearing position", "m"), r"\Delta p": ("Discharge minus suction pressure", "Pa"),
+               "F_i": ("Thrust of one impeller", "N"), "F_g": ("Gross impeller thrust", "N"), "F_t": ("Target residual thrust", "N"),
+               "d_{bp}": ("Balance piston diameter", "m"), "F_{bp}": ("Balance piston force", "N"), "F_r": ("Residual thrust", "N"),
+               "F_{sw}": ("Thrust swing allowance", "N"), "F_d": ("Thrust bearing design load", "N"), "p_a": ("Allowable pad unit load", "Pa"),
+               "A_p": ("Thrust pad area", "m²"), "d_{in}": ("Collar inner pad diameter", "m"), "D_c": ("Thrust collar diameter", "m"),
+               r"\rho": ("Material density", "kg/m³"), "L_{bp}": ("Balance piston length", "m"), "m": ("Mass", "kg"),
+               "m_{imp}": ("Impeller mass from the impeller design", "kg"), "d_{user}": ("Diameter set by the user", "m")})
+    rec.step("Casing torque", r"T = P / \omega", {"P": (P, "W"), r"\omega": (omega, "rad/s")}, T, "N·m", "T", ui="Torque")
+    rec.step("Minimum diameter for torsion", r"d_t = \left(\frac{16\,T\,k_t}{\pi\,\tau_a}\right)^{1/3},\quad \tau_a = 0.15\,S_y",
+             {"T": (T, "N·m"), "k_t": sd.torque_transient_factor, "S_y": (shaft_mat["yield_mpa"] * 1e6, "Pa"), r"\tau_a": (tau_a, "Pa")},
+             d_t * 1e3, "mm", "d_t")
+    if sd.shaft_diameter_at_impellers_mm:
+        rec.step("Shaft diameter at impellers", "d = d_{user}", {}, d * 1e3, "mm", "d", note="Set by the user", ui="Shaft at impellers")
+    else:
+        rec.step("Shaft diameter at impellers", r"d = \max\left(d_t,\ \min\left(\frac{L_s}{8.5},\ 0.4\,D_2\right)\right)",
+                 {"d_t": (d_t, "m"), "L_s": (span, "m"), "D_2": (D2, "m")}, d * 1e3, "mm", "d",
+                 note="Span and diameter depend on each other, so they are found by repeating the layout until d stops changing; rounded up to 5 mm", ui="Shaft at impellers")
+    rec.step("Journal diameter", "d_j = 0.75\\,d" if not sd.journal_diameter_mm else "d_j = d_{user}", {"d": (d, "m")}, d_j * 1e3, "mm", "d_j",
+             note="User value" if sd.journal_diameter_mm else "Rounded up to 5 mm", ui="Journal")
+    rec.step("Seal sleeve diameter", r"d_s = 0.95\,d", {"d": (d, "m")}, d_s * 1e3, "mm", "d_s", note="Rounded up to 5 mm")
+    rec.step("Bearing span", r"L_s = z_{b2} - z_{b1}", {"z_{b1}": (z_b1, "m"), "z_{b2}": (z_b2, "m")}, span * 1e3, "mm", "L_s",
+             note="Bearing positions from adding up the section lengths of the layout")
+    rec.step("Span to diameter ratio", r"L_s / d", {"L_s": (span, "m"), "d": (d, "m")}, span / d, "", "", ui="Span / D")
+    rec.step("Gross impeller thrust", r"F_g = \sum F_i", {}, F_g / 1e3, "kN", "F_g", row=0,
+             note="Sum of the impeller thrusts from the impeller design", ui="Gross kN")
+    dp = P_d - P_s
+    if F_g > F_t and dp > 0 and d_bp > d * 1.05 + 1e-12:
+        rec.step("Balance piston diameter", r"d_{bp} = \sqrt{\frac{4\,(F_g - F_t)}{\pi\,\Delta p} + d_s^2}",
+                 {"F_g": (F_g, "N"), "F_t": (F_t, "N"), r"\Delta p": (dp, "Pa"), "d_s": (d_s, "m")}, d_bp * 1e3, "mm", "d_{bp}",
+                 note="Piston sized so that the target thrust remains toward the coupling end", ui="Balance piston")
+    else:
+        rec.step("Balance piston diameter", r"d_{bp} = 1.05\,d", {"d": (d, "m")}, d_bp * 1e3, "mm", "d_{bp}", note="Smallest piston that clears the shaft", ui="Balance piston")
+    rec.step("Balance piston force", r"F_{bp} = \Delta p\,\frac{\pi}{4}\,(d_{bp}^2 - d_s^2)", {r"\Delta p": (dp, "Pa"), "d_{bp}": (d_bp, "m"), "d_s": (d_s, "m")},
+             F_bp / 1e3, "kN", "F_{bp}", row=0, ui="Piston kN")
+    rec.step("Residual thrust", r"F_r = F_g - F_{bp}", {"F_g": (F_g, "N"), "F_{bp}": (F_bp, "N")}, F_r / 1e3, "kN", "F_r")
+    rec.step("Residual thrust", r"F_r = F_g - F_{bp}", {"F_g": (F_g, "N"), "F_{bp}": (F_bp, "N")}, F_r / 1e3, "kN", "F_r", row=0, ui="Residual kN")
+    rec.step("Thrust swing", r"F_{sw} = 0.3\,|F_g|", {"F_g": (F_g, "N")}, F_sw / 1e3, "kN", "F_{sw}")
+    rec.step("Thrust bearing design load", r"F_d = \max(|F_r| + F_{sw},\ 5\ \mathrm{kN})", {"F_r": (F_r, "N"), "F_{sw}": (F_sw, "N")}, F_d / 1e3, "kN", "F_d", row=0, ui="Design load kN")
+    rec.step("Thrust pad area", r"A_p = F_d / p_a", {"F_d": (F_d, "N"), "p_a": (p_a * 1e6, "Pa")}, A_p * 1e4, "cm²", "A_p")
+    rec.step("Thrust collar diameter", r"D_c = \sqrt{\frac{4\,A_p}{0.8\,\pi} + d_{in}^2},\quad d_{in} = 1.1\,d_j",
+             {"A_p": (A_p, "m²"), "d_{in}": (d_in, "m")}, D_c * 1e3, "mm", "D_c", row=0, note="Pads cover 80 % of the ring", ui="Collar mm")
+    if sd.masses_override:
+        return
+    rho_i, rho_s = imp_mat["density_kg_m3"], shaft_mat["density_kg_m3"]
+    for i, m in enumerate(masses):
+        if m.kind == "coupling":
+            rec.step("Attached mass", r"m = 8\,\left(\frac{1.5\,T}{1000}\right)^{0.7}", {"T": (T, "N·m")}, m.mass, "kg", "m", row=i,
+                     note="Typical disc coupling half with half spacer", ui="Mass kg")
+        elif m.kind == "balance_piston":
+            rec.step("Attached mass", r"m = 0.7\,\rho\,\frac{\pi}{4}\,(d_{bp}^2 - d^2)\,L_{bp}",
+                     {r"\rho": (rho_i, "kg/m³"), "d_{bp}": (d_bp, "m"), "d": (d, "m"), "L_{bp}": (L_bp, "m")}, m.mass, "kg", "m", row=i,
+                     note="0.7 allows for the labyrinth grooves", ui="Mass kg")
+        elif m.kind == "thrust_collar":
+            rec.step("Attached mass", r"m = \rho\,\frac{\pi}{4}\,(D_c^2 - d_j^2)\cdot 0.04\ \mathrm{m}",
+                     {r"\rho": (rho_s, "kg/m³"), "D_c": (D_c, "m"), "d_j": (d_j, "m")}, m.mass, "kg", "m", row=i, ui="Mass kg")
+        elif m.kind == "impeller":
+            rec.step("Attached mass", "m = m_{imp}", {}, m.mass, "kg", "m", row=i, note="From the impeller design", ui="Mass kg")
 
 
 def fe_model(rotor: dict, shaft_mat: dict, supports: list[Support], max_el: float = 0.06) -> RotorModel:

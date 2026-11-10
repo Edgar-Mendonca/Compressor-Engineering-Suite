@@ -225,9 +225,48 @@ def bearing_performance(bearing: JournalBearing, W: float, omega: float, grade: 
     p_unit = W / (bearing.length * bearing.diameter)
     t_babbitt = t_supply + dT_design + 10.0 + 0.25 * U * p_unit / 1e6
     sommerfeld = mu * (omega / (2 * math.pi)) * bearing.length * bearing.diameter / W * (bearing.R / bearing.clearance) ** 2
+    doc = bearing.__dict__.pop("_doc", None)  # set by bearing_tables: document the next (rated-speed) evaluation
+    if doc:
+        _rated_steps(doc[0], doc[1], bearing, W, omega, grade, t_supply, dT_design, t_eff, mu, loss, rho, cp, flow, U, p_unit,
+                     t_babbitt, sommerfeld, coeffs)
     return {**coeffs, "load_n": W, "unit_load_mpa": p_unit / 1e6, "surface_speed_m_s": U, "viscosity_pa_s": mu,
             "effective_temperature_c": t_eff, "power_loss_kw": loss / 1e3, "oil_flow_l_min": flow * 60000,
             "babbitt_temperature_est_c": t_babbitt, "sommerfeld": sommerfeld}
+
+
+def _rated_steps(rec, i, b, W, omega, grade, t_s, dT, t_eff, mu, loss, rho, cp, flow, U, p_unit, t_b, S, k) -> None:
+    tp = b.kind != "plain_cylindrical"
+    rec.step("Bearing static load", "W = R_{static}", {}, W, "N", "W", row=i, note="Static bearing reaction of the rotor weight from the shaft model", ui="Load N")
+    rec.step("Unit load", r"p = \frac{W}{L\,D}", {"W": (W, "N"), "L": (b.length, "m"), "D": (b.diameter, "m")}, p_unit / 1e6, "MPa", "p", row=i, ui="Unit load MPa")
+    rec.step("Journal surface speed", r"U = \omega\,R", {r"\omega": (omega, "rad/s"), "R": (b.R, "m")}, U, "m/s", "U", row=i, ui="U m/s")
+    rec.step("Effective oil temperature", r"T_{eff} = T_s + 0.8\,\Delta T", {"T_s": (t_s, "°C"), r"\Delta T": (dT, "K")}, t_eff, "°C", "T_{eff}", row=i)
+    rec.step("Oil viscosity", r"\log\log(\nu + 0.7) = A - B\,\log T,\quad \mu = \nu\,\rho", {"T_{eff}": (t_eff, "°C")}, mu * 1e3, "mPa·s",
+             r"\mu", row=i, note=f"{grade}: line through the 40 °C and 100 °C grade values")
+    rec.step("Eccentricity ratio", r"F_x(x_0, y_0) = 0,\quad F_y(x_0, y_0) = W,\quad \varepsilon = \frac{\sqrt{x_0^2 + y_0^2}}{c}",
+             {"W": (W, "N"), r"\mu": (mu, "Pa·s"), r"\omega": (omega, "rad/s"), "c": (b.clearance, "m")}, k["eccentricity"], "", r"\varepsilon", row=i,
+             note=("Journal position found by Newton iteration on the integrated film force"
+                   + ("; each pad turned to zero moment about its pivot at every position" if tp else "")), ui="ε")
+    rec.step("Minimum film thickness", r"h_{min} = \min_\theta h(\theta)", {"x_0": (k["x0_m"], "m"), "y_0": (k["y0_m"], "m"), "c": (b.clearance, "m")},
+             k["h_min_m"] * 1e6, "µm", "h_{min}", row=i, ui="hmin µm")
+    c_eff = b.clearance if not tp else b.clearance / (1 - b.preload) * 0.8
+    arc = 2 * math.pi if not tp else b.n_pads * math.radians(b.pad_arc_deg)
+    rec.step("Power loss", r"P_f = \frac{\mu\,(\omega R)^2}{c_{eff}}\,R\,\theta_{arc}\,L",
+             {r"\mu": (mu, "Pa·s"), r"\omega": (omega, "rad/s"), "R": (b.R, "m"), "c_{eff}": (c_eff, "m"), r"\theta_{arc}": (arc, "rad"),
+              "L": (b.length, "m")}, loss / 1e3, "kW", "P_f", row=i, note="Shear loss of a full film over the pad arcs", ui="Loss kW")
+    rec.step("Oil flow", r"Q = \frac{P_f}{\rho\,c_p\,\Delta T}", {"P_f": (loss, "W"), r"\rho": (rho, "kg/m³"), "c_p": (cp, "J/(kg K)"),
+             r"\Delta T": (dT, "K")}, flow * 60000, "L/min", "Q", row=i, ui="Oil L/min")
+    rec.step("Babbitt temperature estimate", r"T_b = T_s + \Delta T + 10 + 0.25\,U\,p", {"T_s": (t_s, "°C"), r"\Delta T": (dT, "K"), "U": (U, "m/s"),
+             "p": (p_unit / 1e6, "MPa")}, t_b, "°C", "T_b", row=i, note="Rough screening estimate only", ui="Babbitt °C (est.)")
+    rec.step("Sommerfeld number", r"S = \frac{\mu\,n\,L\,D}{W}\left(\frac{R}{c}\right)^2", {r"\mu": (mu, "Pa·s"), "n": (omega / (2 * math.pi), "1/s"),
+             "L": (b.length, "m"), "D": (b.diameter, "m"), "W": (W, "N"), "R": (b.R, "m"), "c": (b.clearance, "m")}, S, "", "S", row=i)
+    for kk, nm in (("kxx", "Stiffness kxx"), ("kyy", "Stiffness kyy"), ("kxy", "Stiffness kxy"), ("kyx", "Stiffness kyx")):
+        rec.step(nm, r"K_{ij} = -\frac{F_i(q_j + \delta) - F_i(q_j - \delta)}{2\,\delta}", {r"\delta": (1e-4 * b.clearance, "m")},
+                 k[kk] / 1e6, "MN/m", "K_{ij}", row=i, note="Central difference of the film force about the running position" +
+                 ("; pads re-balanced at each shifted position" if tp else ""))
+    for kk, nm in (("cxx", "Damping cxx"), ("cyy", "Damping cyy")):
+        rec.step(nm, r"C_{ij} = -\frac{F_i(\dot q_j + \dot\delta) - F_i(\dot q_j - \dot\delta)}{2\,\dot\delta}",
+                 {r"\dot\delta": (1e-4 * b.clearance * omega, "m/s")}, k[kk] / 1e3, "kN·s/m", "C_{ij}", row=i,
+                 note="Central difference in journal velocity" + ("; pads held at their running tilt" if tp else ""))
 
 
 def size_journal(W: float, shaft_d: float, design) -> JournalBearing:
@@ -257,9 +296,37 @@ def bearing_tables(bearings: dict[str, tuple[JournalBearing, float]], speeds_rad
             if not r["converged"]:
                 rec.warn(f"{label}: equilibrium not converged at some speeds")
                 break
+        brg._doc = (rec, len(out))
         out[label] = {"geometry": {"diameter_mm": brg.diameter * 1e3, "length_mm": brg.length * 1e3,
                                    "radial_clearance_um": brg.clearance * 1e6, "type": brg.kind,
                                    "pads": brg.n_pads if brg.kind != "plain_cylindrical" else None,
                                    "preload": brg.preload if brg.kind != "plain_cylindrical" else None},
                       "speeds_rpm": (speeds_rad * 60 / (2 * math.pi)).tolist(), "rows": rows}
+    b0 = next(iter(bearings.values()))[0] if bearings else None
+    rec.sym(**{"p": ("Film pressure / unit load", "Pa"), r"\mu": ("Oil dynamic viscosity", "Pa·s"), "L": ("Bearing length", "m"), "D": ("Journal diameter", "m"),
+               "R": ("Journal radius", "m"), "h": ("Oil film thickness", "m"), r"\theta": ("Angle around the bearing", "rad"),
+               r"\omega": ("Shaft angular speed", "rad/s"), "t": ("Time", "s"), "c": ("Radial clearance", "m"), "x": ("Journal horizontal position", "m"),
+               "y": ("Journal vertical position", "m"), "W": ("Static bearing load", "N"), "R_{static}": ("Static reaction from the shaft model", "N"),
+               "U": ("Journal surface speed", "m/s"), "T_s": ("Oil supply temperature", "°C"), r"\Delta T": ("Design oil temperature rise", "K"),
+               "T_{eff}": ("Effective film temperature", "°C"), r"\nu": ("Oil kinematic viscosity", "cSt"), "A": ("Oil grade constant", "-"),
+               "B": ("Oil grade slope", "-"), "T": ("Absolute oil temperature", "K"), r"\rho": ("Oil density", "kg/m³"),
+               "F_x": ("Horizontal film force", "N"), "F_y": ("Vertical film force", "N"), "x_0": ("Running horizontal journal position", "m"),
+               "y_0": ("Running vertical journal position", "m"), r"\varepsilon": ("Eccentricity ratio", "-"), "h_{min}": ("Minimum film thickness", "m"),
+               "P_f": ("Bearing friction power loss", "W"), "c_{eff}": ("Effective film thickness for shear", "m"), r"\theta_{arc}": ("Total wetted arc", "rad"),
+               "Q": ("Oil flow", "m³/s"), "c_p": ("Oil specific heat", "J/(kg K)"), "T_b": ("Estimated babbitt temperature", "°C"),
+               "S": ("Sommerfeld number", "-"), "n": ("Shaft speed", "1/s"), "K_{ij}": ("Stiffness coefficient", "N/m"),
+               "C_{ij}": ("Damping coefficient", "N·s/m"), "F_i": ("Film force component", "N"), "q_j": ("Journal displacement", "m"),
+               r"\dot q_j": ("Journal velocity", "m/s"), r"\delta": ("Displacement step", "m"), r"\dot\delta": ("Velocity step", "m/s"),
+               "n_\\theta": ("Grid points around one pad", "-"), "N_s": ("Number of speeds in the table", "-"),
+               "N_{pts}": ("Speed points over all bearings", "-")})
+    if b0 is not None:
+        n_th = b0.n_theta if b0.kind == "plain_cylindrical" else max(41, b0.n_theta // 4)
+        rec.step("Film pressure (short-bearing Reynolds)",
+                 r"p(\theta) = -\frac{\mu\,L^3}{2\,h^3}\left(\omega\,\frac{\partial h}{\partial \theta} + 2\,\frac{\partial h}{\partial t}\right),\quad"
+                 r" h = c - x\cos\theta - y\sin\theta",
+                 {r"n_\theta": n_th, "N_s": len(speeds_rad)}, n_th, "", r"n_\theta",
+                 note="Negative pressures set to zero (film breaks up); force from the pressure summed with the trapezoid rule over each pad")
+        n_ok = sum(r["converged"] for b in out.values() for r in b["rows"])
+        rec.step("Converged speed points", r"\max\left(|F_x|, |F_y - W|\right) / W < 10^{-4}", {"N_{pts}": len(speeds_rad) * len(out)}, n_ok, "", "",
+                 note="Journal position solved at each speed and bearing by Newton iteration (step tolerance 1e-9 of the clearance)")
     return {"bearings": out, "trace": rec}
