@@ -3,6 +3,13 @@
 Release notes shown on the launcher. Newest first. Releases are published
 from version tags (vX.Y.Z) with a Windows installer attached.
 
+## 0.5.8 - 2026-11-10
+- Calculation transparency: click any underlined result to see how it is calculated: the formula, the values put into it (each linked to the step that produced it) and the result
+- Every module's "How this is calculated" panel lists its calculation steps (per stage, case or bearing) and a symbols table with each symbol's meaning and unit
+- Iterative solvers (FEA, CFD-lite, rotordynamics, dynamics) show their governing equations, method, mesh or grid size, convergence and balance checks
+- Theory handbook: one page per module with the method, key formulas, what each check means and the limits, in plain words
+- References: every standard, book and paper the methods rest on, listed once on the home page
+
 ## 0.5.7 - 2026-10-20
 - New module **CFD-lite flow**: (A) hub-to-shroud flow field by streamline curvature through the inlet, impeller and vaneless diffuser (relative Mach, velocities, pressure, temperature, flow angle); (B) blade-to-blade loading on hub / mid / shroud with diffusion ratio, pressure-side reversal and inducer choke margin, plus the mid-span passage field; (C) vaneless diffuser with friction, rotating-stall margin and volute radial force; (D) return-channel vane cascade by a panel method (loading, deviation, streamlines); (E) CFD case export (TurboGrid-style curves, boundary conditions, field CSV); animated particles in every field; CFD-lite report
 - Robustness: physical limits on the inputs with clear messages (for example a negative pressure or an efficiency entered in %); discharge must be above suction

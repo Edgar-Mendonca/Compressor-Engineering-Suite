@@ -14,7 +14,7 @@ import os as _os
 for _v in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
     _os.environ.setdefault(_v, "1")
 
-__version__ = "0.5.7"
+__version__ = "0.5.8"
 APP_NAME = "CentriForge"
-RELEASE_DATE = "2026-10-20"
+RELEASE_DATE = "2026-11-10"
 GITHUB_REPO = "Edgar-Mendonca/Compressor-Engineering-Suite"

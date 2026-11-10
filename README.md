@@ -297,10 +297,12 @@ packaging/          desktop app bundle (PyInstaller), Windows installer (Inno Se
 | **0.5.3** ✅ | Rotordynamics reports | Shared 2.5D illustration, min / avg / max bearing cases, seals and supports in the lateral model, lateral / stability / torsional reports |
 | **0.5.4** ✅ | Quality | Start-up error on close fixed, sharp report pictures, torsional model drawing, self-test of the engine process, README |
 | **0.5.5** ✅ | Models and reports | FEA viewer with mesh, bands and MAX / MIN; full FEA report; vendor-style rotor and train models with animated mode shapes; 3D whirl orbits; full design-study report |
-| **0.5.7** ✅ | CFD-lite and robustness | Streamline-curvature meridional field, blade loading, diffuser stall and volute, vane cascade, CFD export; input validation, report and UI smoke tests in CI, diagnostics |
 | **0.5.6** ✅ | Dynamics | Compressor-system dynamic simulation with editable animated P&ID, ESD / trip / anti-surge / start-up / settle-out studies and report |
-| 0.6.0 | Bearings, seals and lube detail | Thermo-hydrodynamic bearings, seal leakage maps, API 614 system |
-| 0.7.0 | Bearings, seals and lube | THD bearings, damper seals, thrust bearing film, API 614 systems |
+| **0.5.7** ✅ | CFD-lite and robustness | Streamline-curvature meridional field, blade loading, diffuser stall and volute, vane cascade, CFD export; input validation, report and UI smoke tests in CI, diagnostics |
+| **0.5.8** ✅ | Calculation transparency | Click any result for its formula and numbers, calculation steps and symbols in every module, theory handbook, references on the home page |
+| 0.5.9 | Datasheet | Editable compressor datasheet in our own layout: purchaser, CentriForge and vendor columns, checks, bid comparison, Excel / PDF |
+| 0.6.0 | FEA on Datum Mesh | Real impeller geometry meshed with Gmsh and solved by the Datum Mesh engine, driven from Python; our solver kept as a cross-check |
+| 0.6.1 | Bearings, seals and lube detail | Thermo-hydrodynamic bearings, damper seals, thrust bearing film, API 614 systems |
 | 0.8.0 | Reciprocating compressors | API 618 cylinders, valves, rod load, packing, pulsation |
 | 0.9.0 / 1.0.0 | Screw and PD types; plant level | API 619, foundations, packaging, life-cycle cost |
 
