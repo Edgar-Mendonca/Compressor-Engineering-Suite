@@ -26,6 +26,9 @@ async function req(method: string, url: string, body?: unknown, signal?: AbortSi
 export const api = {
   health: () => req("GET", "/api/health"),
   appInfo: () => req("GET", "/api/app/info"),
+  references: () => req("GET", "/api/app/references"),
+  theory: () => req("GET", "/api/app/theory"),
+  theoryPage: (id: string) => fetch(`/api/app/theory/${id}`).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`)))),
   examples: () => req("GET", "/api/examples"),
   example: (key: string) => req("GET", `/api/examples/${key}`),
   updateCheck: (force = false) => req("GET", `/api/app/update${force ? "?force=true" : ""}`),

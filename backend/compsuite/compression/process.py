@@ -116,7 +116,7 @@ def compress(gas, T1: float, P1: float, P2: float, m_dot: float, eta_p: float,
     }
 
 
-def evaluate_case(gas, case, eta_p: float, mech_loss_fraction: float) -> dict:
+def evaluate_case(gas, case, eta_p: float, mech_loss_fraction: float, row: int | None = None) -> dict:
     T1, P1, P2 = c_to_k(case.suction_temperature_c), bar_to_pa(case.suction_pressure_bara), bar_to_pa(case.discharge_pressure_bara)
     rec = record("compression", "Real-gas polytropic path integration (40 log-pressure steps)", case,
                  assumptions=["Single uncooled compression section unless the stage design adds intercooling",
@@ -130,6 +130,51 @@ def evaluate_case(gas, case, eta_p: float, mech_loss_fraction: float) -> dict:
     out = compress(gas, T1, P1, P2, m, eta_p, mech_loss_fraction)
     if abs(out["schultz"]["eta_p"] - eta_p) > 0.01:
         rec.warn("Schultz and path-integration efficiencies differ by more than 1 point; check real-gas behaviour")
+    _steps(rec, out, T1, P1, P2, mech_loss_fraction, row)
     out["case"] = case.name
     out["trace"] = rec
     return out
+
+
+def _steps(rec, o: dict, T1: float, P1: float, P2: float, loss: float, row: int | None) -> None:
+    def step(*a, **k):
+        rec.step(*a, row=row, **k)
+    s1, s2, sc = o["suction"], o["discharge"], o["schultz"]
+    m = o["mass_flow_kg_s"]
+    rec.sym(**{"P_1": ("Suction pressure", "Pa"), "v_1": ("Suction specific volume", "m³/kg"), "v_2": ("Discharge specific volume", "m³/kg"), "P_2": ("Discharge pressure", "Pa"), "T_1": ("Suction temperature", "K"),
+               "T_2": ("Discharge temperature", "K"), "Z_1": ("Compressibility factor at suction", "-"),
+               "M": ("Molecular weight", "kg/kmol"), "R_u": ("Universal gas constant", "J/(kmol K)"),
+               r"\rho_1": ("Suction density", "kg/m³"), "r": ("Pressure ratio", "-"), "v": ("Specific volume", "m³/kg"),
+               r"\eta_p": ("Polytropic efficiency", "-"), r"\eta_s": ("Isentropic efficiency", "-"),
+               "H_p": ("Polytropic head", "J/kg"), "H_s": ("Isentropic head", "J/kg"), r"\Delta h": ("Enthalpy rise", "J/kg"),
+               "n": ("Polytropic volume exponent", "-"), "f": ("Schultz polytropic head factor", "-"),
+               "H_{p,S}": ("Polytropic head by the Schultz method", "J/kg"), r"\eta_{p,S}": ("Polytropic efficiency by the Schultz method", "-"),
+               r"\dot m": ("Mass flow", "kg/s"), "Q_1": ("Actual suction volume flow", "m³/s"),
+               "P_g": ("Gas power", "W"), "P_{sh}": ("Shaft power", "W"), "k_m": ("Mechanical loss fraction", "-")})
+    step("Suction density", r"\rho_1 = \frac{P_1\,M}{Z_1\,R_u\,T_1}",
+             {"P_1": (P1, "Pa"), "M": (s1.mw, "kg/kmol"), "Z_1": s1.Z, "R_u": (8314.46, "J/(kmol K)"), "T_1": (T1, "K")},
+             s1.rho, "kg/m³", r"\rho_1", ui="Density suction")
+    step("Actual suction volume flow", r"Q_1 = \dot m / \rho_1", {r"\dot m": (m, "kg/s"), r"\rho_1": (s1.rho, "kg/m³")},
+             o["suction_volume_flow_m3_s"] * 3600, "m³/h", "Q_1", note="× 3600 for m³/h", ui="Q1 Am³/h")
+    step("Pressure ratio", "r = P_2 / P_1", {"P_2": (P2, "Pa"), "P_1": (P1, "Pa")}, o["pressure_ratio"], "", "r", ui="PR")
+    step("Polytropic head", r"H_p = \int_{P_1}^{P_2} v\,dP,\quad dh = \frac{v\,dP}{\eta_p}",
+             {"P_1": (P1, "Pa"), "P_2": (P2, "Pa"), r"\eta_p": o["polytropic_efficiency"]}, o["polytropic_head_j_kg"] / 1e3, "kJ/kg",
+             "H_p", ui="Hp kJ/kg", note="Integrated on the real-gas model in 40 equal log-pressure steps; v from the equation of state at each step")
+    step("Enthalpy rise", r"\Delta h = H_p / \eta_p", {"H_p": (o["polytropic_head_j_kg"], "J/kg"), r"\eta_p": o["polytropic_efficiency"]},
+             o["enthalpy_rise_j_kg"] / 1e3, "kJ/kg", r"\Delta h")
+    step("Discharge temperature", r"h(T_2, P_2) = h_1 + \Delta h", {r"\Delta h": (o["enthalpy_rise_j_kg"], "J/kg"), "P_2": (P2, "Pa")},
+             s2.T - 273.15, "°C", "T_2", ui="Td °C", note="T₂ solved from the equation of state so that the enthalpy matches")
+    step("Polytropic exponent (Schultz)", r"n = \frac{\ln(P_2/P_1)}{\ln(v_1/v_2)}",
+             {"P_1": (P1, "Pa"), "P_2": (P2, "Pa"), "v_1": (s1.v, "m³/kg"), "v_2": (s2.v, "m³/kg")}, sc["n"], "", "n")
+    step("Polytropic head (Schultz check)", r"H_p = f\,\frac{n}{n-1}\,(P_2 v_2 - P_1 v_1)",
+             {"f": sc["f"], "n": sc["n"], "P_1": (P1, "Pa"), "v_1": (s1.v, "m³/kg"), "P_2": (P2, "Pa"), "v_2": (s2.v, "m³/kg")},
+             sc["head"] / 1e3, "kJ/kg", "H_p")
+    step("Polytropic efficiency (Schultz check)", r"\eta_{p,S} = H_{p,S} / \Delta h", {"H_{p,S}": (sc["head"], "J/kg"),
+         r"\Delta h": (o["enthalpy_rise_j_kg"], "J/kg")}, sc["eta_p"], "", r"\eta_{p,S}", ui="ηp Schultz")
+    step("Isentropic efficiency", r"\eta_s = H_s / \Delta h", {"H_s": (o["isentropic_head_j_kg"], "J/kg"),
+             r"\Delta h": (o["enthalpy_rise_j_kg"], "J/kg")}, o["isentropic_efficiency"], "", r"\eta_s", ui="ηs",
+             note="H_s = h(T₂s, P₂) − h₁ along constant entropy")
+    step("Gas power", r"P_g = \dot m\,\Delta h", {r"\dot m": (m, "kg/s"), r"\Delta h": (o["enthalpy_rise_j_kg"], "J/kg")},
+             o["gas_power_kw"], "kW", "P_g", ui="Gas kW")
+    step("Shaft power", r"P_{sh} = P_g\,(1 + k_m)", {"P_g": (o["gas_power_kw"] * 1e3, "W"), "k_m": loss}, o["shaft_power_kw"], "kW", "P_{sh}", ui="Shaft kW")
+

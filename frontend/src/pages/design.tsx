@@ -3,6 +3,7 @@ import { api, fmt, type Json } from "../api";
 import { Plot, SERIES } from "../components/Plot";
 import { SchemaForm } from "../components/SchemaForm";
 import { Disclaimer, NeedRun, sub, Kpis, Table, Trace, type Ctx } from "./common";
+import { Register } from "../components/Calc";
 
 export function ProjectPage(c: Ctx) {
   const p = c.project;
@@ -175,6 +176,7 @@ export function ThermoPage(c: Ctx) {
           ["ηp Schultz", (x) => x.schultz.eta_p, 3], ["Td °C", (x) => x.discharge.T - 273.15], ["Td isen. °C", (x) => x.isentropic_discharge_temperature_c],
           ["Z2", (x) => x.discharge.Z, 4], ["Gas kW", (x) => x.gas_power_kw, 0], ["Shaft kW", (x) => x.shaft_power_kw, 0]]} />
       </div>
+      <Register traces={r.cases.map((x: Json) => x.trace)} />
       <Trace trace={r.cases[0]?.trace} />
     </>
   );

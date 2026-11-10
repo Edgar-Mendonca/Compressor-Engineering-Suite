@@ -1,0 +1,56 @@
+[
+ {"group": "Standards", "items": [
+  "API 617 (8th ed. 2014; 9th ed. 2022) Axial and centrifugal compressors and expander-compressors",
+  "API 614 (5th ed.) Lubrication, shaft-sealing and oil-control systems",
+  "API 671 (2020) Special-purpose couplings",
+  "API 684 (2nd ed. 2005; TR 684-1 2019) Rotordynamic tutorial: lateral, stability, torsional",
+  "API 692 (2018) Dry gas sealing systems",
+  "API RP 581 Risk-based inspection methodology",
+  "ASME PTC 10-1997 Performance test code on compressors and exhausters",
+  "ISO 5389:2005 Turbocompressors: performance test code",
+  "ISO 15156 / NACE MR0175 Materials for use in H2S-containing environments",
+  "ISO 5167-2:2003 Flow measurement by orifice plates",
+  "ISO 6336-1 Load capacity of spur and helical gears",
+  "IEC 60534-2-1:2011 / ANSI/ISA-75.01 Control valve sizing equations"]},
+ {"group": "Thermodynamics and compression", "items": [
+  "Peng, D.-Y. & Robinson, D.B. (1976) A new two-constant equation of state, Ind. Eng. Chem. Fundam. 15",
+  "Bell, I.H. et al. (2014) CoolProp, Ind. Eng. Chem. Res. 53",
+  "Schultz, J.M. (1962) The polytropic analysis of centrifugal compressors, ASME J. Eng. Power",
+  "Wagner, W. & Pruss, A. (2002) IAPWS-95 formulation for water"]},
+ {"group": "Aerodynamics and CFD-lite", "items": [
+  "Aungier, R.H. (2000) Centrifugal Compressors: A Strategy for Aerodynamic Design and Analysis, ASME Press",
+  "Lüdtke, K.H. (2004) Process Centrifugal Compressors, Springer",
+  "Wiesner, F.J. (1967) A review of slip factors for centrifugal impellers, ASME J. Eng. Power",
+  "Novak, R.A. (1967) Streamline curvature computing procedures for fluid-flow problems, ASME J. Eng. Power",
+  "Stanitz, J.D. & Prian, V.D. (1951) A rapid approximate method for determining velocity distribution on impeller blades, NACA TN 2421",
+  "Rodgers, C. (1961) Influence of impeller and diffuser characteristics and matching on radial compressor performance, SAE",
+  "Johnston, J.P. & Dean, R.C. (1966) Losses in vaneless diffusers of centrifugal compressors and pumps, ASME J. Eng. Power",
+  "Senoo, Y. & Kinoshita, Y. (1977) Influence of inlet flow conditions and geometries of centrifugal vaneless diffusers on critical flow angle for reverse flow, ASME J. Fluids Eng.",
+  "Stepanoff, A.J. (1957) Centrifugal and Axial Flow Pumps, Wiley (volute radial thrust)",
+  "Katz, J. & Plotkin, A. (2001) Low-Speed Aerodynamics, Cambridge University Press (panel methods)"]},
+ {"group": "Mechanical and structural", "items": [
+  "Timoshenko, S.P. & Goodier, J.N. Theory of Elasticity (rotating disks)",
+  "Zienkiewicz, O.C. & Taylor, R.L. The Finite Element Method (axisymmetric and 3D solids)",
+  "Budynas, R.G. & Nisbett, J.K. Shigley's Mechanical Engineering Design, ch. 6-7",
+  "Pilkey, W.D. Peterson's Stress Concentration Factors",
+  "Manson, S.S. (1965) Fatigue: a complex subject, Exp. Mech. (universal slopes)",
+  "Neuber, H. (1961) Theory of stress concentration for shear-strained prismatical bodies",
+  "Singh, M.P. & Vargo, J.J. (1989) Reliability evaluation of shrouded blading using the SAFE interference diagram, ASME J. Eng. Gas Turbines Power",
+  "Hanlon, P.C. (2001) Compressor Handbook, McGraw-Hill (thrust balance and couplings)"]},
+ {"group": "Bearings, seals and rotordynamics", "items": [
+  "Childs, D.W. (1993) Turbomachinery Rotordynamics, Wiley",
+  "Ocvirk, F.W. (1952) Short-bearing approximation for full journal bearings, NACA TN 2808",
+  "Someya, T. (1989) Journal-Bearing Databook, Springer",
+  "Martin, H.M. (1908) Labyrinth packings, Engineering 85",
+  "Hodkinson, B. (1939) Estimation of the leakage through a labyrinth gland, Proc. IMechE",
+  "Egli, A. (1935) The leakage of steam through labyrinth seals, Trans. ASME",
+  "Wachel, J.C. & von Nimitz, W.W. (1981) Ensuring the reliability of offshore gas compression systems, J. Pet. Tech.",
+  "ROSS rotordynamics library (Petrobras), used as a cross-check engine"]},
+ {"group": "System dynamics and piping", "items": [
+  "Greitzer, E.M. (1976) Surge and rotating stall in axial flow compressors, ASME J. Eng. Power",
+  "Gravdahl, J.T. & Egeland, O. (1999) Compressor Surge and Rotating Stall: Modeling and Control, Springer",
+  "Crane Co. Technical Paper 410, Flow of fluids through valves, fittings and pipe",
+  "Petzold, L. (1983) Automatic selection of methods for solving stiff and nonstiff ODEs (LSODA), SIAM J. Sci. Stat. Comput."]},
+ {"group": "Materials and corrosion", "items": [
+  "de Waard, C., Lotz, U. & Milliams, D.E. (1991) Predictive model for CO2 corrosion engineering in wet natural gas pipelines, Corrosion 47"]}
+]

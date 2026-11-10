@@ -148,3 +148,30 @@ def diagnostics() -> str:
             tail = f.read_text(encoding="utf-8", errors="replace").splitlines()[-120:]
             lines += ["", f"--- {name} (last {len(tail)} lines) ---", *tail]
     return "\n".join(lines)
+
+
+_DATA = Path(__file__).resolve().parent.parent / "data"
+
+
+@router.get("/references")
+def references() -> list:
+    """All references the methods rest on, grouped by subject (shown once, on the home page)."""
+    return json.loads((_DATA / "references.json").read_text(encoding="utf-8"))
+
+
+@router.get("/theory")
+def theory_index() -> list:
+    """Theory handbook pages: id and title."""
+    out = []
+    for f in sorted((_DATA / "theory").glob("*.md")):
+        first = f.read_text(encoding="utf-8").splitlines()[0]
+        out.append({"id": f.stem, "title": first.lstrip("# ").strip()})
+    return out
+
+
+@router.get("/theory/{page}", response_class=PlainTextResponse)
+def theory_page(page: str) -> str:
+    f = _DATA / "theory" / f"{page}.md"
+    if not re.fullmatch(r"[a-z0-9_]+", page) or not f.is_file():
+        raise HTTPException(404, f"No theory page '{page}'")
+    return f.read_text(encoding="utf-8")

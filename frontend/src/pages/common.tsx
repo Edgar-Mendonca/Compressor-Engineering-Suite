@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { fmt, type Json } from "../api";
+import { Steps, Val, openTheory, pageOf } from "../components/Calc";
 
 export const ImpellerFEAView = lazy(() => import("../components/ImpellerFEAView").then((m) => ({ default: m.ImpellerFEAView })));
 export const SectionPlot = lazy(() => import("../components/ImpellerFEAView").then((m) => ({ default: m.SectionPlot })));
@@ -23,7 +24,7 @@ export function Kpis({ items }: { items: [string, string][] }) {
   return (
     <div className="kpis">
       {items.map(([l, v]) => (
-        <div className="kpi" key={l}><div className={`v ${v.length > 16 ? "long" : ""}`}>{v}</div><div className="l">{l}</div></div>
+        <div className="kpi" key={l}><div className={`v ${v.length > 16 ? "long" : ""}`}><Val label={l}>{v}</Val></div><div className="l">{l}</div></div>
       ))}
     </div>
   );
@@ -39,7 +40,7 @@ export function Table({ cols, rows }: { cols: [string, (r: Json) => unknown, num
             <tr key={i}>
               {cols.map(([h, f, nd]) => {
                 const v = f(r);
-                return <td key={h} className={typeof v === "number" ? "n" : ""}>{typeof v === "number" ? fmt(v, nd ?? 1) : (v as string) ?? "–"}</td>;
+                return <td key={h} className={typeof v === "number" ? "n" : ""}>{typeof v === "number" ? <Val label={h} row={i}>{fmt(v, nd ?? 1)}</Val> : (v as string) ?? "–"}</td>;
               })}
             </tr>
           ))}
@@ -53,9 +54,11 @@ export function Trace({ trace }: { trace: Json }) {
   if (!trace) return null;
   return (
     <details className="card" style={{ marginTop: 14 }}>
-      <summary><strong>Method & assumptions</strong> <span className="muted">— {trace.module}: {trace.method}</span></summary>
+      <summary><strong>How this is calculated</strong> <span className="muted">— {trace.method}</span></summary>
+      {pageOf(trace.module) && <button className="chip" style={{ float: "right" }} onClick={() => openTheory(pageOf(trace.module))}>Theory handbook ›</button>}
+      <h4>Assumptions</h4>
       <ul>{trace.assumptions.map((a: string) => <li key={a}>{a}</li>)}</ul>
-      {trace.references.length > 0 && <p className="muted">References: {trace.references.join("; ")}</p>}
+      <Steps trace={trace} />
       {trace.warnings.length > 0 && <ul>{trace.warnings.map((w: string) => <li key={w} className="status attention">{w}</li>)}</ul>}
       <p className="muted">Engine {trace.engine} · v{trace.version} · inputs {trace.inputs_hash}</p>
     </details>

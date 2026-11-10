@@ -345,3 +345,24 @@ tr.sel td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .ts .ts-oil.thin { stroke-width: 2.6; }
 .ts .ts-pipe { fill: none; stroke-linejoin: round; stroke-linecap: round; }
 .rotor-model { width: 100%; height: auto; display: block; background: #fff; border: 1px solid var(--line, #dfe4e8); border-radius: 6px; }
+
+/* calculation transparency */
+.calc-link { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; text-decoration-color: var(--accent, #0B5CAD); }
+.calc-link:hover, .calc-link:focus { color: var(--accent, #0B5CAD); outline: none; }
+.tex.block { display: block; overflow-x: auto; overflow-y: hidden; padding: 6px 0; }
+.modal.calc { position: relative; padding: 18px 22px; }
+.modal.calc.wide { width: min(1100px, calc(100vw - 32px)); height: calc(100vh - 64px); }
+.modal.calc .x { position: absolute; top: 8px; right: 12px; border: 0; background: none; font-size: 22px; cursor: pointer; color: inherit; }
+.stepcard h3 { margin: 2px 0 6px; }
+.stepcard .result { font-size: 1.05em; margin: 8px 0 4px; }
+.t.where td { vertical-align: middle; }
+ol.steps { padding-left: 20px; margin: 6px 0; } ol.steps li { margin: 3px 0; } ol.steps summary { cursor: pointer; }
+ol.steps .stepcard { padding: 4px 0 8px 8px; border-left: 2px solid var(--line-2); margin: 4px 0 6px; }
+.handbook { display: grid; grid-template-columns: 220px 1fr; gap: 18px; height: 100%; min-height: 60vh; }
+.handbook nav { display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line-2); padding-right: 10px; overflow: auto; }
+.handbook nav button { text-align: left; border: 0; background: none; padding: 6px 8px; cursor: pointer; color: inherit; }
+.handbook nav button.on { background: var(--line-2); font-weight: 600; }
+.handbook article { overflow: auto; padding-right: 8px; } .md p, .md li { line-height: 1.55; } .md h2 { margin-top: 0; }
+.refsec { display: grid; grid-template-columns: 1fr 1.4fr; gap: 24px; align-items: start; }
+.refs h4 { margin: 10px 0 4px; } .refs ul { margin: 0; padding-left: 18px; } .refs li { margin: 2px 0; font-size: .92em; }
+@media (max-width: 760px) { .handbook, .refsec { grid-template-columns: 1fr; } }

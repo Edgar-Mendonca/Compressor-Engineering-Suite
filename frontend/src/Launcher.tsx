@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, type Json } from "./api";
 import { GROUPS, MODULES, groupOf, num } from "./modules";
 import { bridge, recent } from "./files";
+import { openTheory, References } from "./components/Calc";
 
 const ago = (t: number) => {
   const m = Math.round((Date.now() / 1000 - t) / 60);
@@ -183,6 +184,12 @@ export function Launcher({ results, project, open, running, actions }: { results
             </article>
           );
         })}
+      </section>
+
+      <section className="hero refsec">
+        <div><h3>Theory handbook</h3><p className="muted">How every module calculates: methods, formulas, checks and limits. In any module, click an underlined result to see its formula and numbers.</p>
+          <button className="btn" onClick={() => openTheory()}>Open the theory handbook</button></div>
+        <details><summary><b>References</b> <span className="muted">— the standards, books and papers the methods rest on</span></summary><References /></details>
       </section>
 
       <footer className="foot mono caps">

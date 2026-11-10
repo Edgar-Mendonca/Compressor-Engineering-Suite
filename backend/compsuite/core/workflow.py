@@ -85,9 +85,9 @@ def run_project(project, level: str = "full") -> dict:
     ops = [operating_point(gas, sizing, project, c) for c in project.cases]
     res["operating_points"] = ops
     cases = []
-    for c, op in zip(project.cases, ops):
+    for i, (c, op) in enumerate(zip(project.cases, ops)):
         eta = c.polytropic_efficiency or op.get("eta_p") or sizing["polytropic_efficiency_overall"]
-        out = evaluate_case(gas, c, float(eta), project.design_basis.mechanical_loss_fraction)
+        out = evaluate_case(gas, c, float(eta), project.design_basis.mechanical_loss_fraction, row=i)
         if sizing["n_sections"] > 1:
             out["trace"].warn("Intercooled design: single-section case evaluation shown for reference; "
                               "see sizing sections and the operating point for the intercooled result")

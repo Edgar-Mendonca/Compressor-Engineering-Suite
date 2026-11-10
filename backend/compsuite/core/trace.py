@@ -64,6 +64,8 @@ class CalcRecord:
     assumptions: list[str] = field(default_factory=list)
     references: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    steps: list[dict] = field(default_factory=list)
+    symbols: dict[str, list[str]] = field(default_factory=dict)
     engine: str = "compsuite built-in"
     version: str = __version__
     timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
@@ -71,6 +73,27 @@ class CalcRecord:
     def warn(self, message: str) -> None:
         if message not in self.warnings:
             self.warnings.append(message)
+
+    def sym(self, **defs: tuple[str, str]) -> None:
+        """Symbol meanings for this record's steps: sym(**{"T_1": ("Suction temperature", "K")})."""
+        self.symbols.update({k: list(v) for k, v in defs.items()})
+
+    def step(self, name: str, formula: str, given: dict[str, Any], result: Any, unit: str = "", symbol: str = "",
+             row: int | None = None, note: str = "", ui: str | list[str] = "") -> Any:
+        """One calculation step shown in the app: LaTeX formula, the values put into it and the result.
+
+        ``given`` maps a LaTeX symbol to its value or (value, unit). ``row`` ties the step to a table row
+        (stage, case). ``ui`` lists the labels the app shows for this value (KPI labels, table headers) when they
+        differ from ``name``; a click on such a value opens this step. Returns ``result`` so a step can wrap the expression it documents.
+        """
+        def num(v: Any) -> Any:
+            v = jsonable(v)
+            return float(f"{v:.6g}") if isinstance(v, float) else v
+        g = {k: ([num(v[0]), v[1]] if isinstance(v, tuple) else [num(v), ""]) for k, v in given.items()}
+        self.steps.append({"name": name, "formula": formula, "given": g, "result": num(result), "unit": unit,
+                           "symbol": symbol, "row": row, "note": note,
+                           "ui": [ui] if isinstance(ui, str) and ui else list(ui or [])})
+        return result
 
 
 def record(module: str, method: str, inputs: Any = None, **kwargs) -> CalcRecord:

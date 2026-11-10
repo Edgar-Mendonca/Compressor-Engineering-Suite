@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "compsuite"
-version = "0.5.7"
+version = "0.5.8"
 description = "CentriForge: open-source integrated compressor engineering, design, simulation and selection suite (preliminary engineering)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,7 +38,7 @@ centriforge = "compsuite.desktop:main"
 include = ["compsuite*"]
 
 [tool.setuptools.package-data]
-compsuite = ["data/*.json", "data/CHANGELOG.md"]
+compsuite = ["data/*.json", "data/CHANGELOG.md", "data/theory/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

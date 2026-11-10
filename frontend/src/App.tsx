@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Json } from "./api";
 import { Launcher } from "./Launcher";
+import { CalcHost, Handbook } from "./components/Calc";
 import { GROUPS, MODULES, num } from "./modules";
 import { NewProject } from "./NewProject";
 import { bridge, onToast, openProject, recent, saveBlob, saveProject, type Toast } from "./files";
@@ -22,7 +23,7 @@ const RENDER: Record<string, (c: P.Ctx) => JSX.Element> = {
   compressor: (c) => <P.CompressorPage {...c} />, impellers: (c) => <P.ImpellerPage {...c} />, impfea: (c) => <ImpellerFEAPage {...c} />, cfd: (c) => <CfdPage {...c} />, rotor: (c) => <P.RotorPage {...c} />,
   bearings: (c) => <P.BearingsSealsPage {...c} />, lateral: (c) => <P.LateralPage {...c} />, torsional: (c) => <P.TorsionalPage {...c} />, dynamics: (c) => <DynamicsPage {...c} />,
   materials: (c) => <P.MaterialsPage {...c} />, aux: (c) => <P.AuxPage {...c} />, optimize: (c) => <P.OptimizePage {...c} />,
-  shoptest: (c) => <ShopTestsPage {...c} />, mrt: (c) => <MechRunTestPage {...c} />, perftest: (c) => <PerfTestPage {...c} />, verify: (c) => <P.VerificationPage {...c} />, reports: (c) => <P.ReportsPage {...c} />,
+  shoptest: (c) => <ShopTestsPage {...c} />, mrt: (c) => <MechRunTestPage {...c} />, perftest: (c) => <PerfTestPage {...c} />, verify: (c) => <P.VerificationPage {...c} />, theory: () => <><h2>Theory handbook</h2><p className="lead">How each module calculates: the method, the key formulas, what each check means and the limits. Click any underlined result in a module to see its own formula and numbers.</p><div className="card"><Handbook /></div></>, reports: (c) => <P.ReportsPage {...c} />,
 };
 
 const DRAFT_KEY = "compsuite.draft.v1";
@@ -182,6 +183,7 @@ export default function App() {
         <div key={t.id} className={`toast ${t.error ? "err" : ""}`}><div><b>{t.text}</b>{t.path && <div className="mono small">{t.path}</div>}</div>
           {t.path && bridge() && <><button className="chip" onClick={() => bridge()!.open_path(t.path!)}>Open file</button>
             <button className="chip" onClick={() => bridge()!.reveal(t.path!)}>Show in folder</button></>}</div>))}</div>
+      <CalcHost />
       {wizard && <NewProject onClose={() => setWizard(false)} onCreate={(p) => { setWizard(false); setTour(null); start(p); }} />}
       {tour !== null && page !== "home" && <TutorialCard step={tour} setStep={setTour} open={open} run={() => project && run(project)} running={running} />}
       {page === "home" || !project ? (
